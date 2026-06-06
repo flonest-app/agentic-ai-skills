@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeFeedback } from '../skills/agentic-ai-lite/scripts/submit-feedback.mjs';
+import { buildIssueTitle, formatIssueBody, sanitizeFeedback } from '../skills/agentic-ai-lite/scripts/submit-feedback.mjs';
 
 test('sanitizes secrets, paths, repo names, and transcript lines', () => {
   const payload = sanitizeFeedback([
@@ -18,4 +18,15 @@ test('sanitizes secrets, paths, repo names, and transcript lines', () => {
   assert.match(payload.sanitized_text, /\[REDACTED_OPENAI_KEY\]/);
   assert.match(payload.sanitized_text, /\[REDACTED_TRANSCRIPT_LINE\]/);
   assert.deepEqual(new Set(payload.redactions), new Set(['repo_name', 'absolute_path', 'secret', 'raw_transcript']));
+});
+
+test('formats Flonest issue payload for third-party skill feedback', () => {
+  const payload = sanitizeFeedback('The skill should preserve local AGENTS.md edits.', {
+    skillId: 'useful-skill',
+    upstreamRepo: 'someone/useful-skill',
+    feedbackKind: 'third-party-skill-feedback',
+  });
+
+  assert.equal(buildIssueTitle(payload), '[agentic-ai] third-party-skill-feedback: useful-skill');
+  assert.match(formatIssueBody(payload), /someone\/useful-skill/);
 });

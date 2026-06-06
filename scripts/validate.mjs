@@ -7,6 +7,7 @@ const mjsFiles = [
   'skills/agentic-ai-lite/scripts/check-updates.mjs',
   'skills/agentic-ai-lite/scripts/submit-feedback.mjs',
   'skills/agentic-ai-lite/scripts/appserver-task.mjs',
+  'skills/agentic-ai-lite/scripts/discover-skills.mjs',
   'skills/agentic-ai-lite/scripts/managed-registry.mjs',
   'skills/agentic-ai-lite/scripts/install-managed-skill.mjs',
   'scripts/sign-manifest.mjs',

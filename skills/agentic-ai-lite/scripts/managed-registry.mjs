@@ -25,6 +25,9 @@ export function openManagedRegistry({
       name TEXT NOT NULL,
       relative_path TEXT NOT NULL,
       source TEXT NOT NULL,
+      management_mode TEXT NOT NULL DEFAULT 'flonest-owned',
+      upstream_repo TEXT,
+      upstream_skill_id TEXT,
       install_spec TEXT,
       version TEXT,
       sha256 TEXT,
@@ -41,6 +44,9 @@ export function openManagedRegistry({
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, 'managed_skills', 'management_mode', "TEXT NOT NULL DEFAULT 'flonest-owned'");
+  ensureColumn(db, 'managed_skills', 'upstream_repo', 'TEXT');
+  ensureColumn(db, 'managed_skills', 'upstream_skill_id', 'TEXT');
 
   return { db, projectRoot: resolve(projectRoot), dbPath };
 }
@@ -69,6 +75,9 @@ export function registerManagedSkill({
   name = skillId,
   skillPath,
   source = 'unknown',
+  managementMode = 'flonest-owned',
+  upstreamRepo = null,
+  upstreamSkillId = null,
   installSpec = null,
   version = null,
   status = 'managed',
@@ -83,21 +92,24 @@ export function registerManagedSkill({
   const hash = sha256Directory(absoluteSkillPath);
 
   registry.db.prepare(`
-    INSERT INTO managed_skills (skill_id, name, relative_path, source, install_spec, version, sha256, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO managed_skills (skill_id, name, relative_path, source, management_mode, upstream_repo, upstream_skill_id, install_spec, version, sha256, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(skill_id) DO UPDATE SET
       name = excluded.name,
       relative_path = excluded.relative_path,
       source = excluded.source,
+      management_mode = excluded.management_mode,
+      upstream_repo = excluded.upstream_repo,
+      upstream_skill_id = excluded.upstream_skill_id,
       install_spec = excluded.install_spec,
       version = excluded.version,
       sha256 = excluded.sha256,
       status = excluded.status,
       updated_at = excluded.updated_at
-  `).run(skillId, name, relativePath, source, installSpec, version, hash, status, now, now);
+  `).run(skillId, name, relativePath, source, managementMode, upstreamRepo, upstreamSkillId, installSpec, version, hash, status, now, now);
 
-  recordEvent(registry, 'skill_registered', skillId, { relativePath, source, installSpec, version, hash, status });
-  return { skill_id: skillId, name, relative_path: relativePath, source, install_spec: installSpec, version, sha256: hash, status };
+  recordEvent(registry, 'skill_registered', skillId, { relativePath, source, managementMode, upstreamRepo, upstreamSkillId, installSpec, version, hash, status });
+  return { skill_id: skillId, name, relative_path: relativePath, source, management_mode: managementMode, upstream_repo: upstreamRepo, upstream_skill_id: upstreamSkillId, install_spec: installSpec, version, sha256: hash, status };
 }
 
 export function recordTunedSkill({
@@ -177,6 +189,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
         name: args.name || args.skillId,
         skillPath: args.path,
         source: args.source,
+        managementMode: args.managementMode,
+        upstreamRepo: args.upstreamRepo,
+        upstreamSkillId: args.upstreamSkillId,
         installSpec: args.installSpec,
         version: args.version,
       });
@@ -220,6 +235,9 @@ function parseArgs(argv) {
     else if (arg === '--name') parsed.name = argv[++i];
     else if (arg === '--path') parsed.path = argv[++i];
     else if (arg === '--source') parsed.source = argv[++i];
+    else if (arg === '--management-mode') parsed.managementMode = argv[++i];
+    else if (arg === '--upstream-repo') parsed.upstreamRepo = argv[++i];
+    else if (arg === '--upstream-skill-id') parsed.upstreamSkillId = argv[++i];
     else if (arg === '--install-spec') parsed.installSpec = argv[++i];
     else if (arg === '--version') parsed.version = argv[++i];
     else if (arg === '--upstream-action') parsed.upstreamAction = argv[++i];
@@ -237,9 +255,15 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage:
   managed-registry.mjs init --project-root <repo>
-  managed-registry.mjs register --project-root <repo> --skill-id <id> --name <name> --path .agents/skills/<id> --source <installed|created-local|tuned-local>
+  managed-registry.mjs register --project-root <repo> --skill-id <id> --name <name> --path .agents/skills/<id> --source <installed|created-local|tuned-local> [--management-mode flonest-owned|external-feedback]
   managed-registry.mjs record-tuned --project-root <repo> --skill-id <id>
   managed-registry.mjs list --project-root <repo>
   managed-registry.mjs verify --project-root <repo>
 `);
+}
+
+function ensureColumn(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }

@@ -3,7 +3,7 @@
   "git_ref": "main",
   "min_cli_version": "0.1.0",
   "name": "Agentic AI Lite",
-  "sha256": "d868bc93f58c3940a294a1d98fd70dc37d2c91a8fe0906ff17d124dc969ae1d2",
+  "sha256": "3910f63b9b884800870b5547b3c1d0d3dd0f64876921b263e09691ae40de9c5e",
   "signature_key_id": "agentic-ai-lab-dev",
   "skill_id": "agentic-ai-lite",
   "update_policy": "verify-signature-preserve-local-edits",

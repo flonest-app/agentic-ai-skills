@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const SECRET_PATTERNS = [
@@ -20,6 +21,9 @@ export function sanitizeFeedback(input, {
   repoName,
   cwd = process.cwd(),
   maxLength = 12000,
+  skillId,
+  upstreamRepo,
+  feedbackKind = 'skill-feedback',
 } = {}) {
   const redactions = [];
   let text = input;
@@ -51,10 +55,46 @@ export function sanitizeFeedback(input, {
   return {
     schema_version: 1,
     kind: 'agentic-ai-feedback',
+    feedback_kind: feedbackKind,
+    skill_id: skillId || null,
+    upstream_repo: upstreamRepo || null,
     classification_hint: classifySanitizedFeedback(text),
     sanitized_text: text,
     redactions: Array.from(new Set(redactions)),
   };
+}
+
+export function buildIssueTitle(input = {}) {
+  const target = input.skillId || input.skill_id || input.upstreamRepo || input.upstream_repo || 'unknown-skill';
+  const kind = input.feedbackKind || input.feedback_kind || 'skill-feedback';
+  return `[agentic-ai] ${kind}: ${target}`;
+}
+
+export function formatIssueBody(payload) {
+  return [
+    'Agentic AI sanitized feedback package.',
+    '',
+    `Feedback kind: ${payload.feedback_kind}`,
+    `Skill ID: ${payload.skill_id || 'unknown'}`,
+    `Upstream repo: ${payload.upstream_repo || 'unknown'}`,
+    `Classification hint: ${payload.classification_hint}`,
+    `Redactions: ${payload.redactions.length > 0 ? payload.redactions.join(', ') : 'none'}`,
+    '',
+    '```text',
+    payload.sanitized_text,
+    '```',
+  ].join('\n');
+}
+
+export function createGitHubIssue({ repo, title, body }) {
+  if (!repo) throw new Error('GitHub repo is required');
+  const result = spawnSync('gh', ['issue', 'create', '--repo', repo, '--title', title, '--body', body], {
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || 'gh issue create failed');
+  }
+  return result.stdout.trim();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -63,9 +103,19 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const payload = sanitizeFeedback(input, {
     repoName: args.repoName,
     cwd: args.cwd,
+    skillId: args.skillId,
+    upstreamRepo: args.upstreamRepo,
+    feedbackKind: args.feedbackKind,
   });
 
-  if (args.endpoint) {
+  if (args.createIssue) {
+    const issueUrl = createGitHubIssue({
+      repo: args.githubRepo || 'flonest-app/agentic-ai-skills',
+      title: args.title || buildIssueTitle(payload),
+      body: formatIssueBody(payload),
+    });
+    console.log(JSON.stringify({ ok: true, issue: issueUrl, payload }, null, 2));
+  } else if (args.endpoint) {
     const response = await fetch(args.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,10 +153,16 @@ function parseArgs(argv) {
     if (arg === '--text') parsed.text = argv[++i];
     else if (arg === '--file') parsed.file = argv[++i];
     else if (arg === '--repo-name') parsed.repoName = argv[++i];
+    else if (arg === '--skill-id') parsed.skillId = argv[++i];
+    else if (arg === '--upstream-repo') parsed.upstreamRepo = argv[++i];
+    else if (arg === '--feedback-kind') parsed.feedbackKind = argv[++i];
     else if (arg === '--cwd') parsed.cwd = argv[++i];
     else if (arg === '--endpoint') parsed.endpoint = argv[++i];
+    else if (arg === '--create-issue') parsed.createIssue = true;
+    else if (arg === '--github-repo') parsed.githubRepo = argv[++i];
+    else if (arg === '--title') parsed.title = argv[++i];
     else if (arg === '--help') {
-      console.log('Usage: submit-feedback.mjs [--text text|--file path] [--repo-name name] [--endpoint url]');
+      console.log('Usage: submit-feedback.mjs [--text text|--file path] [--skill-id id] [--upstream-repo owner/repo] [--create-issue]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

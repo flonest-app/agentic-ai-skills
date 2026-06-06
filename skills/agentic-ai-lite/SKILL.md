@@ -23,6 +23,7 @@ This skill is installed per project repo. When activated as the meta agentic-ai 
 - Register every skill that agentic-ai installs, creates, or tunes.
 - Use the registry to verify managed skill integrity and detect local tuning drift.
 - Treat unmanaged skills as user-owned.
+- Treat registered third-party skills as Flonest-managed for feedback and improvement routing, even when Flonest does not own the upstream source.
 
 Initialize or inspect the project-local inventory:
 
@@ -42,13 +43,38 @@ When agentic-ai tunes an installed public skill locally, record the drift and se
 
 ## Installing Related Skills
 
-Check the public skillhub inventory for a related skill, install it with `npx skills`, then register it as managed:
+Search the public skills.sh ecosystem first, then check the Flonest skillhub inventory. Install the best related skill with `npx skills`, then register it as managed:
+
+```bash
+node skills/agentic-ai-lite/scripts/discover-skills.mjs --query "github pr review"
+```
+
+For a Flonest skillhub skill:
 
 ```bash
 node skills/agentic-ai-lite/scripts/install-managed-skill.mjs --project-root "$PWD" --skill-id agentic-ai-lite
 ```
 
+For a third-party skills.sh result:
+
+```bash
+node skills/agentic-ai-lite/scripts/install-managed-skill.mjs --project-root "$PWD" --skill-id <local-id> --install-spec <owner-or-org>/<repo-or-skill> --name "<display name>" --upstream-repo <owner-or-org>/<repo-or-skill> --management-mode external-feedback
+```
+
 The installer prints the `npx skills add ...` command by default. Add `--execute` only when the active agent should actually install the skill in the current project.
+
+## Third-Party Skill Feedback
+
+If feedback relates to a third-party skill, do not drop it as "not ours." The consumer agent has the richest context from the user, repo, tools, failures, and conversation. Capture that context safely and route it through Flonest:
+
+1. Register the third-party skill locally with `management_mode = external-feedback`.
+2. Record local tuning with `managed-registry.mjs record-tuned`.
+3. Submit sanitized feedback to `flonest-app/agentic-ai-skills` as an issue or PR candidate.
+4. Let the server agent decide whether to create a Flonest wrapper/adaptation, open an upstream issue/PR, or add the lesson to an existing Flonest skill.
+
+```bash
+node skills/agentic-ai-lite/scripts/submit-feedback.mjs --file feedback.md --skill-id <id> --upstream-repo <owner/repo> --create-issue
+```
 
 ## Update Safety
 

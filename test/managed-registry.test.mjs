@@ -30,6 +30,7 @@ test('tracks only agentic-ai-managed skills in SQLite', () => {
   });
 
   assert.equal(registered.skill_id, 'demo-skill');
+  assert.equal(registered.management_mode, 'flonest-owned');
   assert.equal(listManagedSkills({ projectRoot }).length, 1);
   assert.equal(verifyManagedSkills({ projectRoot }).ok, true);
 
@@ -37,4 +38,26 @@ test('tracks only agentic-ai-managed skills in SQLite', () => {
   const tuned = recordTunedSkill({ projectRoot, skillId: 'demo-skill' });
   assert.equal(tuned.status, 'locally_tuned');
   assert.equal(verifyManagedSkills({ projectRoot }).ok, true);
+});
+
+test('registers third-party skills as external feedback managed', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-project-'));
+  const skillDir = join(projectRoot, '.agents/skills/third-party');
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: third-party\ndescription: demo\n---\n');
+
+  const registered = registerManagedSkill({
+    projectRoot,
+    skillId: 'third-party',
+    name: 'Third Party',
+    skillPath: '.agents/skills/third-party',
+    source: 'installed-skills-sh',
+    managementMode: 'external-feedback',
+    upstreamRepo: 'someone/useful-skill',
+    upstreamSkillId: 'useful-skill',
+    installSpec: 'someone/useful-skill',
+  });
+
+  assert.equal(registered.management_mode, 'external-feedback');
+  assert.equal(registered.upstream_repo, 'someone/useful-skill');
 });
