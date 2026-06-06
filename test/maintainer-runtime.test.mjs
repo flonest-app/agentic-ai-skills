@@ -6,9 +6,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerManagedSkill } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
 import {
+  DEFAULT_LABSERVER_URL,
   buildConversationEvidenceSources,
   buildMaintainerPrompt,
   buildWritablePolicy,
+  getLabserverUrl,
   getMaintainerPaths,
   getProjectId,
   initializeMaintainerState,
@@ -22,7 +24,9 @@ import {
 test('initializes maintainer state with isolated codex home and auth-required status', () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-'));
   const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
   process.env.AGENTIC_AI_HOME = join(projectRoot, 'hidden-agentic-ai-home');
+  delete process.env.AGENTIC_AI_LABSERVER_URL;
   const skillDir = join(projectRoot, '.agents/skills/demo-skill');
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: demo-skill\ndescription: demo\n---\n');
@@ -48,6 +52,7 @@ test('initializes maintainer state with isolated codex home and auth-required st
     assert.equal(initialized.paths.stopPath, join(initialized.paths.runtimeProjectDir, 'stop'));
     assert.equal(initialized.paths.threadRefPath, join(initialized.paths.runtimeProjectDir, 'thread-ref.json'));
     assert.equal(initialized.config.thread_ref_path, initialized.paths.threadRefPath);
+    assert.equal(initialized.config.labserver_url, DEFAULT_LABSERVER_URL);
     assert.equal(initialized.config.codex_session_index_path, join(initialized.paths.codexHome, 'session_index.jsonl'));
     assert.equal(initialized.config.codex_sessions_dir, join(initialized.paths.codexHome, 'sessions'));
     assert.equal(initialized.config.source_codex_home, join(process.env.HOME, '.codex'));
@@ -78,6 +83,25 @@ test('initializes maintainer state with isolated codex home and auth-required st
   } finally {
     if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
     else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
+test('resolves labserver URL default, override, and local-only disable', () => {
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  try {
+    delete process.env.AGENTIC_AI_LABSERVER_URL;
+    assert.equal(getLabserverUrl(), DEFAULT_LABSERVER_URL);
+
+    process.env.AGENTIC_AI_LABSERVER_URL = 'https://lab.example';
+    assert.equal(getLabserverUrl(), 'https://lab.example');
+
+    process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+    assert.equal(getLabserverUrl(), '');
+  } finally {
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
   }
 });
 

@@ -15,6 +15,7 @@ const skillRoot = resolve(scriptDir, '..');
 
 export const DEFAULT_STATE_DIR = '.agentic-ai';
 export const DEFAULT_MAINTAINER_SKILL_ID = 'agentic-ai-maintainer';
+export const DEFAULT_LABSERVER_URL = 'https://lab.agi.flonest.app';
 export const STATUS = {
   AUTH_REQUIRED: 'AUTH_REQUIRED',
   READY: 'READY',
@@ -30,6 +31,13 @@ export function getAgenticAiHome() {
 
 export function getProjectId(projectRoot = process.cwd()) {
   return createHash('sha256').update(resolve(projectRoot)).digest('hex').slice(0, 16);
+}
+
+export function getLabserverUrl() {
+  const configured = process.env.AGENTIC_AI_LABSERVER_URL;
+  if (configured === undefined || configured === '') return DEFAULT_LABSERVER_URL;
+  if (/^(?:0|false|off|none)$/i.test(configured.trim())) return '';
+  return configured;
 }
 
 export function getMaintainerPaths({
@@ -99,6 +107,7 @@ export function initializeMaintainerState({
     schema_version: 1,
     project_root: paths.projectRoot,
     project_id: paths.projectId,
+    labserver_url: getLabserverUrl() || null,
     agentic_ai_home: paths.globalHome,
     runtime_project_dir: paths.runtimeProjectDir,
     codex_home: paths.codexHome,
@@ -223,6 +232,7 @@ export async function runMaintenanceOnce({
   }
 
   const managedSkills = listManagedSkills({ projectRoot: paths.projectRoot });
+  const labserverUrl = getLabserverUrl();
   let signedReconcile = null;
   if (process.env.AGENTIC_AI_AUTO_RECONCILE_SIGNED !== 'false') {
     try {
@@ -237,6 +247,7 @@ export async function runMaintenanceOnce({
       projectRoot: paths.projectRoot,
       inboxDir: paths.inboxDir,
       projectId: paths.projectId,
+      labserverUrl,
     });
   } catch (error) {
     inboundSync = { status: 'error', reason: error.message };
@@ -300,6 +311,7 @@ export async function runMaintenanceOnce({
       projectRoot: paths.projectRoot,
       paths,
       output: result.output,
+      labserverUrl,
     });
     const patchPath = join(paths.patchesDir, `${timestamp}.json`);
 

@@ -20,9 +20,9 @@ Run `agi` from the project root. On first use it automatically opens the Codex l
 
 By default `agi` uses `AGENTIC_AI_LOCAL_MODE=apply-safe`: it applies validated `AGENTS.md` changes and registered managed-skill changes, rejects unsafe or unmanaged edits, and keeps a full run record under `.agentic-ai/patches/`. Set `AGENTIC_AI_LOCAL_MODE=proposal-only` to queue proposals without editing project files.
 
-Sanitized reusable feedback is queued under `.agentic-ai/outbox/`. If `AGENTIC_AI_LABSERVER_URL` is set, `agi` posts queued feedback to `<url>/feedback/agentic-ai`; otherwise the queue stays local for retry.
+Sanitized reusable feedback is queued under `.agentic-ai/outbox/` and posted to `https://lab.agi.flonest.app/feedback/agentic-ai` by default. Set `AGENTIC_AI_LABSERVER_URL` to override the labserver URL, or set `AGENTIC_AI_LABSERVER_URL=off` to keep the queue local for retry.
 
-When the labserver receives GitHub review, issue, PR, or discussion clarification, `agi` polls `<url>/feedback/agentic-ai/projects/<project-id>/requests`, stores sanitized requests under `.agentic-ai/inbox/`, and answers them through the normal outbox with `response_to`. This keeps the review loop agent-to-agent without exposing raw project context.
+When the labserver receives GitHub review, issue, PR, or discussion clarification, `agi` polls `https://lab.agi.flonest.app/feedback/agentic-ai/projects/<project-id>/requests`, stores sanitized requests under `.agentic-ai/inbox/`, and answers them through the normal outbox with `response_to`. This keeps the review loop agent-to-agent without exposing raw project context.
 
 When a local managed draft or locally tuned skill later appears in the signed public skillhub, `agi` verifies the manifest signature, backs up the local draft under `.agentic-ai/local-drafts/`, and reconciles it to the signed upstream version through the managed installer. Set `AGENTIC_AI_AUTO_RECONCILE_SIGNED=false` to disable that automatic replacement.
 
