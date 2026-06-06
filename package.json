@@ -1,0 +1,14 @@
+{
+  "name": "agentic-ai-skills",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/validate.mjs",
+    "test": "node --test",
+    "manifest:sign": "node scripts/sign-manifest.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
