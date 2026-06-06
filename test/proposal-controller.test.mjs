@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  parseMaintainerJson,
   processMaintainerOutput,
   submitQueuedOutbox,
 } from '../runtime/agentic-ai-maintainer/scripts/proposal-controller.mjs';
@@ -12,6 +13,20 @@ import {
   listManagedSkills,
   registerManagedSkill,
 } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
+
+test('parses maintainer JSON with a short preface', () => {
+  const parsed = parseMaintainerJson(`Using agentic-ai-maintainer for this smoke test.\n${maintainerOutput([{
+    classification: 'project-specific',
+    target: 'AGENTS.md',
+    action: 'update',
+    rationale: 'capture durable project rule',
+    proposed_patch: null,
+  }])}`);
+
+  assert.equal(parsed.summary, 'maintainer summary');
+  assert.equal(parsed.proposals[0].target, 'AGENTS.md');
+  assert.equal(parsed.proposals[0].classification, 'project-specific');
+});
 
 test('applies valid AGENTS.md patch and creates missing AGENTS.md', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-proposals-'));

@@ -30,6 +30,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
+export const DEFAULT_CODEX_SANDBOX = 'workspace-write';
+
 export async function runAppServerTask({
   cwd = process.cwd(),
   prompt = 'Classify this feedback for durable agent learning.',
@@ -40,7 +42,7 @@ export async function runAppServerTask({
   codexHome,
   stream = false,
   approvalPolicy = 'never',
-  sandbox = 'workspaceWrite',
+  sandbox = DEFAULT_CODEX_SANDBOX,
   serviceName = 'agentic_ai_lite',
 } = {}) {
   const client = new MiniAppServerClient({ cwd, codexHome });

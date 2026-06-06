@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { initRegistry, listManagedSkills } from './managed-registry.mjs';
-import { runAppServerTask } from './appserver-task.mjs';
+import { DEFAULT_CODEX_SANDBOX, runAppServerTask } from './appserver-task.mjs';
 import { processMaintainerOutput } from './proposal-controller.mjs';
 import { listPendingLabserverRequests, syncLabserverRequests } from './labserver-sync.mjs';
 import { reconcileSignedManagedSkills } from './reconcile-signed-skills.mjs';
@@ -285,7 +285,7 @@ export async function runMaintenanceOnce({
       skillName: DEFAULT_MAINTAINER_SKILL_ID,
       stream: false,
       approvalPolicy: 'never',
-      sandbox: 'workspaceWrite',
+      sandbox: DEFAULT_CODEX_SANDBOX,
       serviceName: 'agentic_ai_maintainer',
     });
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DEFAULT_CODEX_SANDBOX } from '../runtime/agentic-ai-maintainer/scripts/appserver-task.mjs';
 import { registerManagedSkill } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
 import {
   DEFAULT_LABSERVER_URL,
@@ -110,6 +111,8 @@ test('resolves labserver URL default, override, and local-only disable', () => {
 });
 
 test('builds controller-mediated write policy and sidecar prompt', () => {
+  assert.equal(DEFAULT_CODEX_SANDBOX, 'workspace-write');
+
   const policy = buildWritablePolicy({
     projectRoot: '/tmp/project',
     managedSkills: [{ skill_id: 'demo', relative_path: '.agents/skills/demo' }],
