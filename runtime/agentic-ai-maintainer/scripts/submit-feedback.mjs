@@ -97,7 +97,7 @@ export function createGitHubIssue({ repo, title, body }) {
   return result.stdout.trim();
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const input = args.text ?? (args.file ? readFileSync(args.file, 'utf8') : readFileSync(0, 'utf8'));
   const payload = sanitizeFeedback(input, {

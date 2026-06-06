@@ -15,7 +15,7 @@ import {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const projectRoot = resolve(args.projectRoot || process.cwd());
 

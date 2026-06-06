@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const agenticAiHome = resolve(process.env.AGENTIC_AI_HOME || join(homedir(), '.agentic-ai'));
   const codexHome = resolve(args.codexHome || join(agenticAiHome, 'codex-home'));

@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const prompt = args.prompt || 'Classify this feedback for durable agent learning.';
   const cwd = resolve(args.cwd || process.cwd());

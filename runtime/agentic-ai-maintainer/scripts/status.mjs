@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMaintainerStatus } from './maintainer-runtime.mjs';
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   console.log(JSON.stringify(readMaintainerStatus({
     projectRoot: resolve(args.projectRoot || process.cwd()),

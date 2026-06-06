@@ -194,7 +194,7 @@ export function verifyManagedSkills(options = {}) {
   };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
 

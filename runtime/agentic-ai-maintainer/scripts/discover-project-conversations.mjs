@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 const TEXT_FILE_RE = /\.(jsonl|json|md|txt|log)$/i;
 const MAX_READ_BYTES = 25 * 1024 * 1024;
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const projectRoot = resolve(args.projectRoot || process.cwd());
   const result = discoverProjectConversations({
