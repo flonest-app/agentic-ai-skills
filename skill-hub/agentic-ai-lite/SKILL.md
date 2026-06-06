@@ -13,7 +13,7 @@ The normal coding agent must not improve `AGENTS.md`, read conversation history,
 Install Agentic AI for the user:
 
 ```bash
-npx skills.sh add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth
+npx skills add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth
 node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs
 ```
 

@@ -5,10 +5,10 @@ Public Agentic AI distribution for bootstrap skills, the CLI runtime, and the Fl
 One-line install prompt for a coding agent:
 
 ```text
-Install Agentic AI: run `npx skills.sh add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me I can start it with just `agi`.
+Install Agentic AI: run `npx skills add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me I can start it with just `agi`.
 ```
 
-`agentic-ai-lite` is managed under `skill-hub/`, so `--full-depth` is required for the `skills.sh` CLI to discover it.
+`agentic-ai-lite` is managed under `skill-hub/`, so `--full-depth` is required for the `skills` CLI to discover it.
 
 The bundled installer downloads the Agentic AI CLI tarball from the latest GitHub Release, places it under `~/.agentic-ai`, updates PATH for new terminals, and leaves the full maintainer runtime out of the project tree. No npm registry publish is required. After installation, the user-facing command is:
 
@@ -35,7 +35,7 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 ## Layout
 
 - `runtime/agentic-ai-maintainer/` - full public maintainer runtime used by the Agentic AI CLI/appserver.
-- `skill-hub/agentic-ai-lite/` - tiny bootstrap skill installable by `npx skills.sh`.
+- `skill-hub/agentic-ai-lite/` - tiny bootstrap skill installable by `npx skills`.
 - `skill-hub/` - public source tree for Flonest-managed skills created or improved through issues and PRs.
 - `registry/skills.json` - inventory of Flonest-managed `skill-hub/` entries only.
 - `registry/manifest.json` and `registry/manifest.sig` - signed update metadata for the skillhub.
@@ -66,7 +66,7 @@ agi
 
 The registry lives at `.agentic-ai/registry.sqlite` by default. It records which skills agentic-ai installed, created, or tuned, plus their hashes. This lets agentic-ai improve managed skills while treating all unregistered skills as user-owned.
 
-The public skillhub inventory lives at [registry/skills.json](registry/skills.json). It indexes only managed public skills under `skill-hub/`, including `agentic-ai-lite`; the appserver-only maintainer runtime under `runtime/` is intentionally excluded. Future Flonest-managed domain skills can be copied from `skill-hub/` into a project and registered in the local inventory. Third-party `skills.sh` skills are still installed with `npx skills.sh add` and registered as `external-feedback`.
+The public skillhub inventory lives at [registry/skills.json](registry/skills.json). It indexes only managed public skills under `skill-hub/`, including `agentic-ai-lite`; the appserver-only maintainer runtime under `runtime/` is intentionally excluded. Future Flonest-managed domain skills can be copied from `skill-hub/` into a project and registered in the local inventory. Third-party skills.sh skills are still installed with `npx skills add` and registered as `external-feedback`.
 
 ## Validate
 

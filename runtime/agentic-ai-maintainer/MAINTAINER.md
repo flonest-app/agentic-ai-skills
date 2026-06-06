@@ -97,13 +97,13 @@ Everything else in the project is read-only for this workflow.
 
 ## Installing Related Skills
 
-Search the public skills.sh ecosystem first, then check the Flonest skillhub inventory. The discovery helper reads the same `skills.sh` search API used by the `npx skills.sh find` command and returns structured results for decisions:
+Search the public skills.sh ecosystem first, then check the Flonest skillhub inventory. The discovery helper reads the same skills.sh search API used by the `npx skills find` command and returns structured results for decisions:
 
 ```bash
 node runtime/agentic-ai-maintainer/scripts/discover-skills.mjs --query "github pr review"
 ```
 
-Use `--cli` only when a human-facing interactive `npx skills.sh find` search is useful.
+Use `--cli` only when a human-facing interactive `npx skills find` search is useful.
 
 Do not copy this `agentic-ai-maintainer` runtime skill into project `.agents/skills/`. The CLI mirrors it into `~/.agentic-ai/codex-home` for the appserver.
 

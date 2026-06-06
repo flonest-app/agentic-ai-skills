@@ -46,7 +46,7 @@ test('builds agentic-ai-lite install command from skillhub inventory', () => {
 
   assert.deepEqual(buildInstallCommand(findSkill(inventory, 'agentic-ai-lite')), [
     'npx',
-    'skills.sh',
+    'skills',
     'add',
     'flonest-app/agentic-ai-skills',
     '--agent',
@@ -59,7 +59,7 @@ test('builds agentic-ai-lite install command from skillhub inventory', () => {
   ]);
 });
 
-test('builds third-party skills.sh install records', () => {
+test('builds third-party skills CLI install records', () => {
   const skill = buildExternalSkill({
     skillId: 'useful-skill',
     name: 'Useful Skill',
@@ -71,7 +71,7 @@ test('builds third-party skills.sh install records', () => {
   assert.equal(skill.management_mode, 'external-feedback');
   assert.deepEqual(buildInstallCommand(skill), [
     'npx',
-    'skills.sh',
+    'skills',
     'add',
     'someone/useful-skill',
     '--agent',

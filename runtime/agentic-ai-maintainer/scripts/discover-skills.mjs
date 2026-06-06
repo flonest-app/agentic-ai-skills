@@ -7,7 +7,7 @@ const DEFAULT_LIMIT = 10;
 
 export function buildSkillsSearchCommand(query) {
   if (!query) throw new Error('--query is required');
-  return ['npx', 'skills.sh', 'find', query];
+  return ['npx', 'skills', 'find', query];
 }
 
 export function buildSkillsSearchUrl(query, { apiBase = DEFAULT_API_BASE, limit = DEFAULT_LIMIT } = {}) {
@@ -83,7 +83,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       ok: false,
       error: err.message,
       fallback_command: buildSkillsSearchCommand(args.query),
-      note: 'Run with --cli to use the interactive npx skills.sh find fallback.',
+      note: 'Run with --cli to use the interactive npx skills find fallback.',
     }, null, 2));
     process.exit(1);
   }

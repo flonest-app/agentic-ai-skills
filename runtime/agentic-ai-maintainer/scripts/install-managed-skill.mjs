@@ -21,11 +21,11 @@ export function buildInstallCommand(skill) {
     throw new Error('runtime-only skills are initialized under ~/.agentic-ai/codex-home, not installed into project skills');
   }
   if (skill?.install?.type === 'skill-hub-copy') {
-    throw new Error('skill-hub-copy installs are copied from the local Flonest skill-hub, not installed with npx skills.sh');
+    throw new Error('skill-hub-copy installs are copied from the local Flonest skill-hub, not installed with npx skills');
   }
   if (!skill?.install?.spec) throw new Error('skill install spec is missing');
   const install = skill.install;
-  const command = ['npx', 'skills.sh', 'add', install.spec];
+  const command = ['npx', 'skills', 'add', install.spec];
   const agents = normalizeList(install.agent || install.agents || 'codex');
   const skillNames = normalizeList(install.skill || install.skills);
 

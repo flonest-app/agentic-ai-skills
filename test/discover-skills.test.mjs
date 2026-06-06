@@ -6,8 +6,8 @@ import {
   normalizeSkillsSearchResponse,
 } from '../runtime/agentic-ai-maintainer/scripts/discover-skills.mjs';
 
-test('builds skills.sh search command', () => {
-  assert.deepEqual(buildSkillsSearchCommand('github pr review'), ['npx', 'skills.sh', 'find', 'github pr review']);
+test('builds skills CLI search command', () => {
+  assert.deepEqual(buildSkillsSearchCommand('github pr review'), ['npx', 'skills', 'find', 'github pr review']);
 });
 
 test('builds skills.sh API search URL', () => {

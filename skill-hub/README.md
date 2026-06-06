@@ -4,7 +4,7 @@ This directory is the public source tree for Flonest-managed skills.
 
 ## Online Prompt
 
-Install Agentic AI: run `npx skills.sh add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me I can start it with just `agi`.
+Install Agentic AI: run `npx skills add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me I can start it with just `agi`.
 
 The installer downloads `agentic-ai.tgz` from the latest GitHub Release. Do not tell users to install from the npm registry.
 
