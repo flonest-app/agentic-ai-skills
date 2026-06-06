@@ -5,7 +5,7 @@ Public lightweight skill distribution for Agentic AI improvement loops.
 Install/update target:
 
 ```bash
-npx skills add <owner>/agentic-ai-skills
+npx skills add krishamaze/agentic-ai-skills
 ```
 
 The `agentic-ai-lite` skill helps coding agents:
