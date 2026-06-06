@@ -1,11 +1,11 @@
 {
   "channel": "stable",
-  "git_ref": "main",
+  "git_ref": "v0.1.0",
   "min_cli_version": "0.1.0",
-  "name": "Agentic AI Lite",
-  "sha256": "3910f63b9b884800870b5547b3c1d0d3dd0f64876921b263e09691ae40de9c5e",
+  "name": "Agentic AI Skillhub",
+  "sha256": "69e38da3b22e89b0b58d5d5eda7c36b22bc2b476cb98aaa42447495f60be87d5",
   "signature_key_id": "agentic-ai-lab-dev",
-  "skill_id": "agentic-ai-lite",
+  "skill_id": "agentic-ai-skillhub",
   "update_policy": "verify-signature-preserve-local-edits",
   "version": "0.1.0"
 }

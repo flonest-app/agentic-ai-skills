@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agentic AI Lite"
+  short_description: "Launch the Agentic AI maintainer runtime"
+  default_prompt: "Use $agentic-ai-lite only to install Agentic AI with the bundled installer or start it with agi when the user asks."
+
+policy:
+  allow_implicit_invocation: false

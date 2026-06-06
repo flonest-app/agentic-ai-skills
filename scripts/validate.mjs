@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { checkUpdates, sha256Directory } from '../skills/agentic-ai-lite/scripts/check-updates.mjs';
+import { checkUpdates, sha256Directory } from '../runtime/agentic-ai-maintainer/scripts/check-updates.mjs';
 
 const mjsFiles = [
-  'skills/agentic-ai-lite/scripts/check-updates.mjs',
-  'skills/agentic-ai-lite/scripts/submit-feedback.mjs',
-  'skills/agentic-ai-lite/scripts/appserver-task.mjs',
-  'skills/agentic-ai-lite/scripts/discover-skills.mjs',
-  'skills/agentic-ai-lite/scripts/managed-registry.mjs',
-  'skills/agentic-ai-lite/scripts/install-managed-skill.mjs',
+  'bin/agentic-ai.mjs',
+  'skill-hub/agentic-ai-lite/scripts/install-maintainer.mjs',
+  'runtime/agentic-ai-maintainer/scripts/codex-login.mjs',
+  'runtime/agentic-ai-maintainer/scripts/check-updates.mjs',
+  'runtime/agentic-ai-maintainer/scripts/submit-feedback.mjs',
+  'runtime/agentic-ai-maintainer/scripts/appserver-task.mjs',
+  'runtime/agentic-ai-maintainer/scripts/maintainer-runtime.mjs',
+  'runtime/agentic-ai-maintainer/scripts/proposal-controller.mjs',
+  'runtime/agentic-ai-maintainer/scripts/labserver-sync.mjs',
+  'runtime/agentic-ai-maintainer/scripts/reconcile-signed-skills.mjs',
+  'runtime/agentic-ai-maintainer/scripts/start-maintainer.mjs',
+  'runtime/agentic-ai-maintainer/scripts/maintainer-daemon.mjs',
+  'runtime/agentic-ai-maintainer/scripts/status.mjs',
+  'runtime/agentic-ai-maintainer/scripts/stop-maintainer.mjs',
+  'runtime/agentic-ai-maintainer/scripts/discover-project-conversations.mjs',
+  'runtime/agentic-ai-maintainer/scripts/discover-skills.mjs',
+  'runtime/agentic-ai-maintainer/scripts/managed-registry.mjs',
+  'runtime/agentic-ai-maintainer/scripts/install-managed-skill.mjs',
+  'scripts/prepare-github-release.mjs',
   'scripts/sign-manifest.mjs',
   'scripts/validate.mjs',
 ];
@@ -22,7 +35,15 @@ for (const file of mjsFiles) {
   }
 }
 
-const skill = readFileSync('skills/agentic-ai-lite/SKILL.md', 'utf8');
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+if (packageJson.bin?.agi !== 'bin/agentic-ai.mjs') {
+  throw new Error('package.json must expose the agi binary');
+}
+if (packageJson.private !== true) {
+  throw new Error('package.json must remain private because releases use GitHub assets, not the npm registry');
+}
+
+const skill = readFileSync('skill-hub/agentic-ai-lite/SKILL.md', 'utf8');
 if (!skill.startsWith('---\n')) throw new Error('SKILL.md missing frontmatter');
 const end = skill.indexOf('\n---', 4);
 if (end < 0) throw new Error('SKILL.md missing closing frontmatter');
@@ -30,25 +51,37 @@ const header = skill.slice(4, end);
 if (!/^name:\s*agentic-ai-lite$/m.test(header)) throw new Error('SKILL.md missing name');
 if (!/^description:\s*.+$/m.test(header)) throw new Error('SKILL.md missing description');
 
+const openaiYaml = readFileSync('skill-hub/agentic-ai-lite/agents/openai.yaml', 'utf8');
+if (!/allow_implicit_invocation:\s*false/.test(openaiYaml)) {
+  throw new Error('agentic-ai-lite must not be implicitly invoked by normal coding agents');
+}
+
 const update = await checkUpdates({
   manifestRef: 'registry/manifest.json',
   signatureRef: 'registry/manifest.sig',
   publicKeyRef: 'registry/keys/agentic-ai-lab-dev-public.pem',
-  installedSkill: 'skills/agentic-ai-lite',
+  installedSkill: 'skill-hub',
+  expectedSkillId: 'agentic-ai-skillhub',
 });
 
 if (!update.validSignature) throw new Error('manifest signature is invalid');
-if (update.manifestHash !== sha256Directory('skills/agentic-ai-lite')) {
-  throw new Error('manifest hash does not match skill directory');
+if (update.manifestHash !== sha256Directory('skill-hub')) {
+  throw new Error('manifest hash does not match skill-hub directory');
 }
 
 const inventory = JSON.parse(readFileSync('registry/skills.json', 'utf8'));
-if (!Array.isArray(inventory.skills) || inventory.skills.length === 0) {
-  throw new Error('registry/skills.json must contain at least one skill');
+if (!Array.isArray(inventory.skills)) {
+  throw new Error('registry/skills.json must contain a skills array');
 }
 for (const skill of inventory.skills) {
-  if (!skill.skill_id || !skill.install?.spec || !skill.default_project_path) {
+  if (!skill.skill_id || !skill.path || !skill.install?.type) {
     throw new Error(`registry skill is missing required fields: ${JSON.stringify(skill)}`);
+  }
+  if (!skill.path.startsWith('skill-hub/')) {
+    throw new Error(`managed skill must live under skill-hub/: ${skill.skill_id}`);
+  }
+  if (!skill.default_project_path) {
+    throw new Error(`project-managed skill is missing default_project_path: ${skill.skill_id}`);
   }
 }
 

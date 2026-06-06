@@ -1,11 +1,16 @@
 {
-  "name": "agentic-ai-skills",
+  "name": "@flonest/agentic-ai",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "type": "module",
+  "bin": {
+    "agi": "bin/agentic-ai.mjs",
+    "agentic-ai": "bin/agentic-ai.mjs"
+  },
   "scripts": {
     "check": "node scripts/validate.mjs",
     "test": "node --test",
+    "release:pack": "node scripts/prepare-github-release.mjs",
     "manifest:sign": "node scripts/sign-manifest.mjs"
   },
   "engines": {

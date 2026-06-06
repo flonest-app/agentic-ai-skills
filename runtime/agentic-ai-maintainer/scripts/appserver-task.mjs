@@ -9,35 +9,85 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
   const prompt = args.prompt || 'Classify this feedback for durable agent learning.';
   const cwd = resolve(args.cwd || process.cwd());
-  const client = new MiniAppServerClient({ cwd, codexHome: args.codexHome || process.env.CODEX_HOME });
+  try {
+    const result = await runAppServerTask({
+      cwd,
+      prompt,
+      model: args.model,
+      threadId: args.threadId,
+      skillPath: args.skillPath,
+      skillName: args.skillName,
+      codexHome: args.codexHome || process.env.CODEX_HOME,
+      stream: true,
+    });
+    if (result.authRequired) {
+      console.error('Codex auth is required. Run agi; first-time login starts automatically.');
+      process.exit(2);
+    }
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+}
 
+export async function runAppServerTask({
+  cwd = process.cwd(),
+  prompt = 'Classify this feedback for durable agent learning.',
+  model = 'gpt-5.5',
+  threadId,
+  skillPath,
+  skillName = 'agentic-ai-maintainer',
+  codexHome,
+  stream = false,
+  approvalPolicy = 'never',
+  sandbox = 'workspaceWrite',
+  serviceName = 'agentic_ai_lite',
+} = {}) {
+  const client = new MiniAppServerClient({ cwd, codexHome });
   try {
     await client.start();
     const account = await client.request('account/read', { refreshToken: false }, 30000);
-    if (!account.account) {
-      console.error('Codex auth is required. Run Codex login first, then retry.');
-      process.exit(2);
-    }
-
-    const thread = (await client.request('thread/start', {
-      model: args.model || 'gpt-5.5',
-      cwd,
-      approvalPolicy: 'never',
-      sandbox: 'workspaceWrite',
-      serviceName: 'agentic_ai_lite',
-    })).thread;
+    if (!account.account) return { authRequired: true, account };
 
     const input = [{ type: 'text', text: prompt }];
-    if (args.skillPath) input.push({ type: 'skill', name: 'agentic-ai-lite', path: resolve(args.skillPath) });
+    if (skillPath) input.push({ type: 'skill', name: skillName, path: resolve(skillPath) });
 
-    const turn = (await client.request('turn/start', { threadId: thread.id, input, cwd }, 30000)).turn;
-    await client.waitForTurn(turn.id);
+    let thread = threadId ? { id: threadId } : await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+    let reusedThread = Boolean(threadId);
+    let turn;
+    try {
+      turn = (await client.request('turn/start', { threadId: thread.id, input, cwd }, 30000)).turn;
+    } catch (err) {
+      if (!threadId) throw err;
+      thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+      reusedThread = false;
+      turn = (await client.request('turn/start', { threadId: thread.id, input, cwd }, 30000)).turn;
+    }
+    const completed = await client.waitForTurn(turn.id, { stream });
+    return {
+      authRequired: false,
+      threadId: thread.id,
+      reusedThread,
+      turnId: turn.id,
+      turn: completed.turn,
+      output: completed.output,
+    };
   } finally {
     client.stop();
   }
 }
 
-class MiniAppServerClient extends EventEmitter {
+async function startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName }) {
+  return (await client.request('thread/start', {
+    model,
+    cwd,
+    approvalPolicy,
+    sandbox,
+    serviceName,
+  })).thread;
+}
+
+export class MiniAppServerClient extends EventEmitter {
   constructor({ cwd, codexHome }) {
     super();
     this.cwd = cwd;
@@ -79,16 +129,19 @@ class MiniAppServerClient extends EventEmitter {
     this.proc.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
-  waitForTurn(turnId) {
+  waitForTurn(turnId, { stream = false } = {}) {
     return new Promise((resolveWait) => {
+      let output = '';
       const onNotification = (message) => {
         if (message.method === 'item/agentMessage/delta') {
-          process.stdout.write(message.params?.delta || '');
+          const delta = message.params?.delta || '';
+          output += delta;
+          if (stream) process.stdout.write(delta);
         }
         if (message.method !== 'turn/completed' || message.params?.turn?.id !== turnId) return;
         this.off('notification', onNotification);
-        process.stdout.write('\n');
-        resolveWait(message.params.turn);
+        if (stream) process.stdout.write('\n');
+        resolveWait({ turn: message.params.turn, output });
       };
       this.on('notification', onNotification);
     });
@@ -120,7 +173,9 @@ function parseArgs(argv) {
     if (arg === '--cwd') parsed.cwd = argv[++i];
     else if (arg === '--prompt') parsed.prompt = argv[++i];
     else if (arg === '--model') parsed.model = argv[++i];
+    else if (arg === '--thread-id') parsed.threadId = argv[++i];
     else if (arg === '--skill-path') parsed.skillPath = argv[++i];
+    else if (arg === '--skill-name') parsed.skillName = argv[++i];
     else if (arg === '--codex-home') parsed.codexHome = argv[++i];
     else if (arg === '--help') {
       console.log('Usage: appserver-task.mjs --cwd <path> --prompt <text> [--skill-path SKILL.md]');

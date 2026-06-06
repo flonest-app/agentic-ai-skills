@@ -1,0 +1,6 @@
+.github/
+/test/
+/scripts/
+/dist/
+AGENTS.md
+*.tgz

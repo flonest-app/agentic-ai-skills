@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildIssueTitle, formatIssueBody, sanitizeFeedback } from '../skills/agentic-ai-lite/scripts/submit-feedback.mjs';
+import { buildIssueTitle, formatIssueBody, sanitizeFeedback } from '../runtime/agentic-ai-maintainer/scripts/submit-feedback.mjs';
 
 test('sanitizes secrets, paths, repo names, and transcript lines', () => {
   const payload = sanitizeFeedback([

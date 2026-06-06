@@ -2,27 +2,26 @@
   "schema_version": 1,
   "registry_id": "agentic-ai-skillhub",
   "owner": "agentic-ai-lab-server",
-  "description": "Inventory of public skills that agentic-ai may install, tune, and register in a consuming project.",
+  "description": "Inventory of Flonest-managed public skills under skill-hub/. The appserver-only maintainer runtime under skills/ is intentionally not a registry entry.",
   "skills": [
     {
       "skill_id": "agentic-ai-lite",
       "name": "Agentic AI Lite",
       "version": "0.1.0",
       "channel": "stable",
-      "path": "skills/agentic-ai-lite",
+      "path": "skill-hub/agentic-ai-lite",
       "default_project_path": ".agents/skills/agentic-ai-lite",
+      "source": "flonest-skillhub",
+      "management_mode": "flonest-owned",
       "install": {
         "type": "npx-skills",
-        "spec": "flonest-app/agentic-ai-skills"
-      },
-      "tags": [
-        "agents-md",
-        "skills",
-        "feedback",
-        "registry",
-        "agent-improvement"
-      ],
-      "managed": true
+        "spec": "flonest-app/agentic-ai-skills",
+        "agent": "codex",
+        "skill": "agentic-ai-lite",
+        "copy": true,
+        "yes": true,
+        "full_depth": true
+      }
     }
   ]
 }

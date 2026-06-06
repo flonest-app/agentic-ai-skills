@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalize, sha256Directory, verifyManifestSignature } from '../skills/agentic-ai-lite/scripts/check-updates.mjs';
+import { canonicalize, sha256Directory, verifyManifestSignature } from '../runtime/agentic-ai-maintainer/scripts/check-updates.mjs';
 
 test('verifies a signed manifest', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agentic-ai-skill-'));
@@ -12,7 +12,7 @@ test('verifies a signed manifest', () => {
 
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const manifest = {
-    skill_id: 'agentic-ai-lite',
+    skill_id: 'agentic-ai-skillhub',
     version: '0.1.0',
     sha256: sha256Directory(dir),
   };

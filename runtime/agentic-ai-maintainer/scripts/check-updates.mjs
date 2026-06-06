@@ -37,7 +37,7 @@ export async function checkUpdates({
   signatureRef,
   publicKeyRef,
   installedSkill,
-  expectedSkillId = 'agentic-ai-lite',
+  expectedSkillId = 'agentic-ai-skillhub',
 } = {}) {
   const manifest = JSON.parse(await readText(manifestRef || process.env.AGENTIC_AI_MANIFEST_URL || join(repoRoot, 'registry/manifest.json')));
   const signature = await readText(signatureRef || process.env.AGENTIC_AI_MANIFEST_SIG_URL || join(repoRoot, 'registry/manifest.sig'));
@@ -63,14 +63,14 @@ export async function checkUpdates({
   };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const result = await checkUpdates({
       manifestRef: args.manifest || args.manifestUrl,
       signatureRef: args.signature || args.signatureUrl,
       publicKeyRef: args.publicKey,
-      installedSkill: args.installedSkill || resolve(scriptDir, '..'),
+      installedSkill: args.installedSkill || join(repoRoot, 'skill-hub'),
       expectedSkillId: args.expectedSkillId,
     });
     console.log(JSON.stringify(result, null, 2));

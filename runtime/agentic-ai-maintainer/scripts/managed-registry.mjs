@@ -137,6 +137,26 @@ export function recordTunedSkill({
   return { skill_id: skillId, status: 'locally_tuned', sha256: hash, upstream_action: upstreamAction };
 }
 
+export function markManagedSkillRemoved({
+  projectRoot = process.cwd(),
+  skillId,
+} = {}) {
+  if (!skillId) throw new Error('--skill-id is required');
+  const registry = openManagedRegistry({ projectRoot });
+  const existing = registry.db.prepare('SELECT * FROM managed_skills WHERE skill_id = ?').get(skillId);
+  if (!existing) throw new Error(`skill is not managed by agentic-ai: ${skillId}`);
+
+  const now = new Date().toISOString();
+  registry.db.prepare(`
+    UPDATE managed_skills
+    SET status = ?, updated_at = ?
+    WHERE skill_id = ?
+  `).run('removed', now, skillId);
+
+  recordEvent(registry, 'skill_removed', skillId, { relativePath: existing.relative_path });
+  return { skill_id: skillId, relative_path: existing.relative_path, status: 'removed' };
+}
+
 export function listManagedSkills(options = {}) {
   const registry = openManagedRegistry(options);
   return registry.db.prepare('SELECT * FROM managed_skills ORDER BY skill_id').all();
@@ -202,6 +222,11 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
         upstreamAction: args.upstreamAction,
         note: args.note,
       });
+    } else if (command === 'mark-removed') {
+      result = markManagedSkillRemoved({
+        projectRoot: resolve(args.projectRoot || process.cwd()),
+        skillId: args.skillId,
+      });
     } else if (command === 'list') {
       result = { skills: listManagedSkills({ projectRoot: resolve(args.projectRoot || process.cwd()) }) };
     } else if (command === 'verify') {
@@ -257,6 +282,7 @@ function printHelp() {
   managed-registry.mjs init --project-root <repo>
   managed-registry.mjs register --project-root <repo> --skill-id <id> --name <name> --path .agents/skills/<id> --source <installed|created-local|tuned-local> [--management-mode flonest-owned|external-feedback]
   managed-registry.mjs record-tuned --project-root <repo> --skill-id <id>
+  managed-registry.mjs mark-removed --project-root <repo> --skill-id <id>
   managed-registry.mjs list --project-root <repo>
   managed-registry.mjs verify --project-root <repo>
 `);

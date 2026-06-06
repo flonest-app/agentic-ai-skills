@@ -1,0 +1,27 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm test
+      - run: npm run manifest:sign -- --git-ref "$GITHUB_REF_NAME"
+        env:
+          REGISTRY_SIGNING_PRIVATE_KEY: ${{ secrets.REGISTRY_SIGNING_PRIVATE_KEY }}
+      - run: npm run check
+      - run: npm run release:pack -- --tag "$GITHUB_REF_NAME"
+      - run: gh release create "$GITHUB_REF_NAME" dist/agentic-ai.tgz dist/agentic-ai.tgz.sha256 dist/release.json --title "Agentic AI $GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}

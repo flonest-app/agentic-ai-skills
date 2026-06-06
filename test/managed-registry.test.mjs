@@ -10,7 +10,7 @@ import {
   recordTunedSkill,
   verifyManagedSkills,
   listManagedSkills,
-} from '../skills/agentic-ai-lite/scripts/managed-registry.mjs';
+} from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
 
 test('tracks only agentic-ai-managed skills in SQLite', () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-project-'));

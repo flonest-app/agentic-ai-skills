@@ -2,10 +2,10 @@
 import { createSign } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { canonicalize, sha256Directory } from '../skills/agentic-ai-lite/scripts/check-updates.mjs';
+import { canonicalize, sha256Directory } from '../runtime/agentic-ai-maintainer/scripts/check-updates.mjs';
 
 const args = parseArgs(process.argv.slice(2));
-const skillDir = resolve(args.skillDir || 'skills/agentic-ai-lite');
+const skillDir = resolve(args.skillDir || 'skill-hub');
 const manifestPath = resolve(args.manifest || 'registry/manifest.json');
 const signaturePath = resolve(args.signature || 'registry/manifest.sig');
 const privateKey = readPrivateKey(args);
