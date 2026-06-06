@@ -63,6 +63,10 @@ test('initializes maintainer state with isolated codex home and auth-required st
     assert.equal(initialized.paths.maintainerSkillPath, join(projectRoot, 'hidden-agentic-ai-home/codex-home/skills/agentic-ai-maintainer/SKILL.md'));
     assert.equal(existsSync(initialized.paths.maintainerSkillPath), true);
     assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /name: agentic-ai-maintainer/);
+    assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /Helper scripts are available/);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/discover-project-conversations.mjs')), true);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/proposal-controller.mjs')), true);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'references/maintainer-agent-prompt.md')), true);
     assert.equal(initialized.status.status, 'AUTH_REQUIRED');
     assert.equal(readMaintainerStatus({ projectRoot }).status, 'AUTH_REQUIRED');
     assert.deepEqual(initialized.config.write_policy.allow, [

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -443,6 +443,7 @@ export function buildConversationEvidenceSources({ paths, historyRoots = [] }) {
 
 export function installHiddenMaintainerSkill(paths) {
   const body = readFileSync(paths.maintainerPromptPath, 'utf8').trim();
+  materializeSkillSupport(paths);
   writeFileSync(paths.maintainerSkillPath, [
     '---',
     `name: ${DEFAULT_MAINTAINER_SKILL_ID}`,
@@ -451,11 +452,21 @@ export function installHiddenMaintainerSkill(paths) {
     '# Agentic AI Maintainer',
     '',
     'This skill is installed in the Agentic AI private Codex home, not in the normal user Codex home or project skill directory.',
+    'Helper scripts are available beside this file under `scripts/`; use paths like `scripts/discover-project-conversations.mjs` when needed.',
     '',
     body,
     '',
   ].join('\n'));
   return paths.maintainerSkillPath;
+}
+
+function materializeSkillSupport(paths) {
+  for (const name of ['scripts', 'references']) {
+    const source = join(skillRoot, name);
+    const target = join(paths.maintainerSkillDir, name);
+    rmSync(target, { recursive: true, force: true });
+    cpSync(source, target, { recursive: true });
+  }
 }
 
 export function readMaintainerStatus({ projectRoot = process.cwd(), stateDir = DEFAULT_STATE_DIR } = {}) {
