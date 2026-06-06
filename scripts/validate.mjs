@@ -7,6 +7,8 @@ const mjsFiles = [
   'skills/agentic-ai-lite/scripts/check-updates.mjs',
   'skills/agentic-ai-lite/scripts/submit-feedback.mjs',
   'skills/agentic-ai-lite/scripts/appserver-task.mjs',
+  'skills/agentic-ai-lite/scripts/managed-registry.mjs',
+  'skills/agentic-ai-lite/scripts/install-managed-skill.mjs',
   'scripts/sign-manifest.mjs',
   'scripts/validate.mjs',
 ];
@@ -37,6 +39,16 @@ const update = await checkUpdates({
 if (!update.validSignature) throw new Error('manifest signature is invalid');
 if (update.manifestHash !== sha256Directory('skills/agentic-ai-lite')) {
   throw new Error('manifest hash does not match skill directory');
+}
+
+const inventory = JSON.parse(readFileSync('registry/skills.json', 'utf8'));
+if (!Array.isArray(inventory.skills) || inventory.skills.length === 0) {
+  throw new Error('registry/skills.json must contain at least one skill');
+}
+for (const skill of inventory.skills) {
+  if (!skill.skill_id || !skill.install?.spec || !skill.default_project_path) {
+    throw new Error(`registry skill is missing required fields: ${JSON.stringify(skill)}`);
+  }
 }
 
 console.log(`validation ok (${mjsFiles.length} scripts)`);

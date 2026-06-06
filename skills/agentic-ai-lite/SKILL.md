@@ -14,6 +14,42 @@ Use this skill to turn feedback, repeated friction, and observed failures into b
 4. Treat transcript discovery as candidate triage, not a mandate to read everything.
 5. Distill only durable lessons: user corrections, repeated failures, stable workflow rules, and reusable validation steps.
 
+## Project-Local Ownership
+
+This skill is installed per project repo. When activated as the meta agentic-ai layer:
+
+- Warn the user that project `AGENTS.md` will become agentic-ai-managed before creating or rewriting it.
+- Never touch user-installed skills unless they are registered in the local agentic-ai managed-skill inventory.
+- Register every skill that agentic-ai installs, creates, or tunes.
+- Use the registry to verify managed skill integrity and detect local tuning drift.
+- Treat unmanaged skills as user-owned.
+
+Initialize or inspect the project-local inventory:
+
+```bash
+node skills/agentic-ai-lite/scripts/managed-registry.mjs init --project-root "$PWD"
+node skills/agentic-ai-lite/scripts/managed-registry.mjs list --project-root "$PWD"
+node skills/agentic-ai-lite/scripts/managed-registry.mjs verify --project-root "$PWD"
+```
+
+When agentic-ai creates a new local skill, register it:
+
+```bash
+node skills/agentic-ai-lite/scripts/managed-registry.mjs register --project-root "$PWD" --skill-id <id> --name <name> --path .agents/skills/<id> --source created-local
+```
+
+When agentic-ai tunes an installed public skill locally, record the drift and send sanitized feedback upstream as a PR candidate, issue, or discussion. The public skillhub evolves from these generic-safe changes; local project-specific edits stay in `AGENTS.md`.
+
+## Installing Related Skills
+
+Check the public skillhub inventory for a related skill, install it with `npx skills`, then register it as managed:
+
+```bash
+node skills/agentic-ai-lite/scripts/install-managed-skill.mjs --project-root "$PWD" --skill-id agentic-ai-lite
+```
+
+The installer prints the `npx skills add ...` command by default. Add `--execute` only when the active agent should actually install the skill in the current project.
+
 ## Update Safety
 
 Before accepting upstream skill updates, verify the signed manifest:
@@ -56,4 +92,5 @@ This uses `codex app-server` over `stdio`; it does not expose a websocket listen
 - Do not include raw transcripts or screenshots.
 - Do not encode a specific agent product's history path.
 - Do not make transcript discovery exhaustive. Mandatory distillation means mandatory triage and selective inspection.
+- Do not modify skills that are absent from the local managed-skill registry.
 - Prefer scripts for deterministic checks, signatures, sanitization, and update decisions.
