@@ -1,9 +1,9 @@
 {
   "channel": "stable",
-  "git_ref": "v0.1.0",
+  "git_ref": "v0.1.3",
   "min_cli_version": "0.1.0",
   "name": "Agentic AI Skillhub",
-  "sha256": "69e38da3b22e89b0b58d5d5eda7c36b22bc2b476cb98aaa42447495f60be87d5",
+  "sha256": "752153255f750000ee912b94e46c2c0eef4b49a4562714e54a35009d82d9c1b2",
   "signature_key_id": "agentic-ai-lab-dev",
   "skill_id": "agentic-ai-skillhub",
   "update_policy": "verify-signature-preserve-local-edits",
