@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { checkUpdates, sha256Directory } from '../runtime/agentic-ai-maintainer/scripts/check-updates.mjs';
+import { checkUpdates, findManifestSkill, sha256Directory } from '../runtime/agentic-ai-maintainer/scripts/check-updates.mjs';
 
 const mjsFiles = [
   'bin/agentic-ai.mjs',
@@ -70,6 +70,7 @@ if (update.manifestHash !== sha256Directory('skill-hub')) {
 }
 
 const inventory = JSON.parse(readFileSync('registry/skills.json', 'utf8'));
+const manifest = JSON.parse(readFileSync('registry/manifest.json', 'utf8'));
 if (!Array.isArray(inventory.skills)) {
   throw new Error('registry/skills.json must contain a skills array');
 }
@@ -82,6 +83,19 @@ for (const skill of inventory.skills) {
   }
   if (!skill.default_project_path) {
     throw new Error(`project-managed skill is missing default_project_path: ${skill.skill_id}`);
+  }
+  if (Array.isArray(manifest.skills)) {
+    const manifestSkill = findManifestSkill(manifest, skill.skill_id);
+    if (!manifestSkill) {
+      throw new Error(`manifest is missing per-skill hash: ${skill.skill_id}`);
+    }
+    if (manifestSkill.path !== skill.path) {
+      throw new Error(`manifest skill path mismatch for ${skill.skill_id}: ${manifestSkill.path} !== ${skill.path}`);
+    }
+    const currentSkillHash = sha256Directory(skill.path);
+    if (manifestSkill.sha256 !== currentSkillHash) {
+      throw new Error(`manifest skill hash mismatch for ${skill.skill_id}`);
+    }
   }
 }
 

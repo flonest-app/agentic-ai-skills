@@ -32,11 +32,17 @@ export function verifyManifestSignature({ manifest, signature, publicKey }) {
   return verifier.verify(publicKey, Buffer.from(signature.trim(), 'base64'));
 }
 
+export function findManifestSkill(manifest, skillId) {
+  if (!skillId) return null;
+  return (manifest.skills || []).find((skill) => skill.skill_id === skillId) || null;
+}
+
 export async function checkUpdates({
   manifestRef,
   signatureRef,
   publicKeyRef,
   installedSkill,
+  installedSkillId,
   expectedSkillId = 'agentic-ai-skillhub',
 } = {}) {
   const manifest = JSON.parse(await readText(manifestRef || process.env.AGENTIC_AI_MANIFEST_URL || join(repoRoot, 'registry/manifest.json')));
@@ -48,6 +54,11 @@ export async function checkUpdates({
   }
 
   const validSignature = verifyManifestSignature({ manifest, signature, publicKey });
+  const manifestSkill = installedSkillId ? findManifestSkill(manifest, installedSkillId) : null;
+  if (installedSkillId && !manifestSkill) {
+    throw new Error(`manifest does not include skill: ${installedSkillId}`);
+  }
+  const expectedInstalledHash = manifestSkill?.sha256 || manifest.sha256;
   const installedHash = installedSkill && existsSync(installedSkill) ? sha256Directory(installedSkill) : null;
 
   return {
@@ -56,9 +67,13 @@ export async function checkUpdates({
     channel: manifest.channel,
     git_ref: manifest.git_ref,
     manifestHash: manifest.sha256,
+    manifestSkills: Array.isArray(manifest.skills) ? manifest.skills : [],
+    manifestSkill,
+    manifestSkillHash: manifestSkill?.sha256 || null,
+    expectedInstalledHash,
     installedHash,
     validSignature,
-    updateAvailable: Boolean(installedHash && installedHash !== manifest.sha256),
+    updateAvailable: Boolean(installedHash && installedHash !== expectedInstalledHash),
     updatePolicy: manifest.update_policy,
   };
 }
@@ -66,11 +81,14 @@ export async function checkUpdates({
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = parseArgs(process.argv.slice(2));
+    const installedSkill = args.installedSkill
+      || (args.installedSkillId ? join(repoRoot, 'skill-hub', args.installedSkillId) : join(repoRoot, 'skill-hub'));
     const result = await checkUpdates({
       manifestRef: args.manifest || args.manifestUrl,
       signatureRef: args.signature || args.signatureUrl,
       publicKeyRef: args.publicKey,
-      installedSkill: args.installedSkill || join(repoRoot, 'skill-hub'),
+      installedSkill,
+      installedSkillId: args.installedSkillId,
       expectedSkillId: args.expectedSkillId,
     });
     console.log(JSON.stringify(result, null, 2));
@@ -91,9 +109,10 @@ function parseArgs(argv) {
     else if (arg === '--signature-url') parsed.signatureUrl = argv[++i];
     else if (arg === '--public-key') parsed.publicKey = argv[++i];
     else if (arg === '--installed-skill') parsed.installedSkill = argv[++i];
+    else if (arg === '--installed-skill-id') parsed.installedSkillId = argv[++i];
     else if (arg === '--expected-skill-id') parsed.expectedSkillId = argv[++i];
     else if (arg === '--help') {
-      console.log('Usage: check-updates.mjs [--manifest path|--manifest-url url] [--signature path|--signature-url url] [--public-key path] [--installed-skill path]');
+      console.log('Usage: check-updates.mjs [--manifest path|--manifest-url url] [--signature path|--signature-url url] [--public-key path] [--installed-skill path] [--installed-skill-id id]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

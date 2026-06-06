@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkUpdates, sha256Directory } from './check-updates.mjs';
@@ -45,6 +45,15 @@ export async function reconcileSignedManagedSkills({
     if (!isLocalDraftOrTune(skill)) continue;
     const publicSkill = findSkill(publicInventory, skill.skill_id);
     if (!publicSkill) continue;
+    const manifestSkill = update.manifestSkills.find((entry) => entry.skill_id === skill.skill_id) || null;
+    if (update.manifestSkills.length > 0 && !manifestSkill) {
+      results.push({
+        skill_id: skill.skill_id,
+        status: 'skipped',
+        reason: 'signed manifest does not include a per-skill hash for this skill',
+      });
+      continue;
+    }
 
     const currentPath = resolve(root, skill.relative_path);
     if (!existsSync(currentPath)) {
@@ -72,11 +81,29 @@ export async function reconcileSignedManagedSkills({
       execute: true,
       replace: true,
     });
+    const installedPath = installed.installed_path || installed.registered?.relative_path || skill.relative_path;
+    if (manifestSkill?.sha256) {
+      const installedHash = sha256Directory(resolve(root, installedPath));
+      if (installedHash !== manifestSkill.sha256) {
+        rmSync(resolve(root, installedPath), { recursive: true, force: true });
+        cpSync(backupPath, resolve(root, installedPath), { recursive: true, force: true });
+        results.push({
+          skill_id: skill.skill_id,
+          status: 'rejected',
+          reason: 'installed skill hash does not match signed manifest',
+          expected_sha256: manifestSkill.sha256,
+          current_sha256: installedHash,
+          backup_path: backupPath,
+        });
+        continue;
+      }
+    }
     results.push({
       skill_id: skill.skill_id,
       status: 'replaced-with-signed-upstream',
       backup_path: backupPath,
-      installed_path: installed.installed_path || installed.registered?.relative_path || skill.relative_path,
+      installed_path: installedPath,
+      signed_sha256: manifestSkill?.sha256 || null,
     });
   }
 

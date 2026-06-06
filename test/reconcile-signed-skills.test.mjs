@@ -65,6 +65,11 @@ function createSignedManifestFixture() {
     signature_key_id: 'test',
     update_policy: 'verify-signature-preserve-local-edits',
     sha256: sha256Directory(skillHub),
+    skills: [{
+      skill_id: 'demo',
+      path: 'skill-hub/demo',
+      sha256: sha256Directory(join(skillHub, 'demo')),
+    }],
   };
   const signer = createSign('sha256');
   signer.update(canonicalize(manifest));
