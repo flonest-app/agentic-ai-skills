@@ -13,7 +13,7 @@
       "default_project_path": ".agents/skills/agentic-ai-lite",
       "install": {
         "type": "npx-skills",
-        "spec": "krishamaze/agentic-ai-skills"
+        "spec": "flonest-app/agentic-ai-skills"
       },
       "tags": [
         "agents-md",

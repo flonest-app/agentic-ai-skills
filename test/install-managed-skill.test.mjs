@@ -7,11 +7,11 @@ test('builds npx skills install command from inventory', () => {
     skills: [
       {
         skill_id: 'agentic-ai-lite',
-        install: { spec: 'krishamaze/agentic-ai-skills' },
+        install: { spec: 'flonest-app/agentic-ai-skills' },
       },
     ],
   };
 
   const skill = findSkill(inventory, 'agentic-ai-lite');
-  assert.deepEqual(buildInstallCommand(skill), ['npx', 'skills', 'add', 'krishamaze/agentic-ai-skills']);
+  assert.deepEqual(buildInstallCommand(skill), ['npx', 'skills', 'add', 'flonest-app/agentic-ai-skills']);
 });
