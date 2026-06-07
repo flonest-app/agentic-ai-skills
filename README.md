@@ -47,14 +47,12 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 For now, release the CLI through GitHub Releases instead of npm:
 
 ```bash
-npm run manifest:sign -- --git-ref v0.1.8
-npm run check
-npm test
-npm run release:pack
-gh release create v0.1.8 dist/agentic-ai.tgz dist/agentic-ai.tgz.sha256 dist/release.json --title "Agentic AI v0.1.8"
+gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.9
 ```
 
-The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.8`.
+The prepare workflow signs `registry/manifest.json`, commits `registry/manifest.sig` to `main`, creates the tag on that signed commit, packs the GitHub Release asset, and publishes the live release.
+
+The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.9`.
 
 ## Project-Local Registry
 

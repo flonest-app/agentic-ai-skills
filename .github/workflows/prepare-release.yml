@@ -1,0 +1,80 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to prepare, for example v0.1.9
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: prepare-release-${{ inputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          release_tag="${{ inputs.tag }}"
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v0.1.9: $release_tag"
+            exit 1
+          fi
+          git fetch origin main --tags
+          git checkout -B main origin/main
+          expected_tag="v$(node -p "require('./package.json').version")"
+          if [ "$release_tag" != "$expected_tag" ]; then
+            echo "Release tag $release_tag must match package.json version $expected_tag"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null 2>&1; then
+            echo "Tag already exists: $release_tag"
+            exit 1
+          fi
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            echo "Release already exists: $release_tag"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: npm test
+      - name: Sign manifest
+        run: npm run manifest:sign -- --git-ref "${{ inputs.tag }}"
+        env:
+          REGISTRY_SIGNING_PRIVATE_KEY: ${{ secrets.REGISTRY_SIGNING_PRIVATE_KEY }}
+      - run: npm run check
+      - name: Commit signed manifest
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add registry/manifest.json registry/manifest.sig
+          if git diff --cached --quiet; then
+            echo "Signed manifest already matches main"
+          else
+            git commit -m "Commit signed ${{ inputs.tag }} skill manifest"
+            git push origin HEAD:main
+          fi
+      - name: Create and push tag on signed commit
+        run: |
+          set -euo pipefail
+          git tag "${{ inputs.tag }}" HEAD
+          git push origin "${{ inputs.tag }}"
+      - run: npm run release:pack -- --tag "${{ inputs.tag }}"
+      - name: Create GitHub Release
+        run: gh release create "${{ inputs.tag }}" dist/agentic-ai.tgz dist/agentic-ai.tgz.sha256 dist/release.json --title "Agentic AI ${{ inputs.tag }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
