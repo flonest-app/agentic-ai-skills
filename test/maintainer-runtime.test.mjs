@@ -175,6 +175,102 @@ test('runMaintenanceOnce uses script-owned proposal file instead of final provid
   }
 });
 
+test('runMaintenanceOnce treats empty Codex turns as blocked no-op without controller', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-empty-'));
+  const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
+  const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  process.env.AGENTIC_AI_HOME = agenticHome;
+  process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+  mkdirSync(join(agenticHome, 'codex-home'), { recursive: true });
+  writeFileSync(join(agenticHome, 'codex-home/auth.json'), '{}\n');
+
+  try {
+    const status = await runMaintenanceOnce({
+      projectRoot,
+      runAppServerTaskImpl: async () => ({
+        authRequired: false,
+        threadId: 'thread-empty',
+        reusedThread: true,
+        resumeError: null,
+        turnId: 'turn-empty',
+        skillAttached: false,
+        output: '',
+        activity: {
+          output_chars: 0,
+          agent_message_delta_count: 0,
+          assistant_message_count: 0,
+          tool_call_count: 0,
+          item_count: 0,
+          notification_count: 1,
+        },
+        noModelOutput: true,
+      }),
+      processMaintainerOutputImpl: async () => {
+        throw new Error('controller should not run for an empty Codex turn');
+      },
+    });
+
+    assert.equal(status.status, 'NO_MODEL_OUTPUT');
+    assert.equal(status.thread_id, 'thread-empty');
+    assert.equal(status.turn_id, 'turn-empty');
+    assert.match(status.message, /no maintainer output/);
+    assert.equal(existsSync(join(projectRoot, '.agentic-ai/patches')), true);
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
+    else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
+test('runMaintenanceOnce maps empty turn with exhausted credits to quota wait after saving thread', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-empty-quota-'));
+  const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
+  const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  process.env.AGENTIC_AI_HOME = agenticHome;
+  process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+  mkdirSync(join(agenticHome, 'codex-home'), { recursive: true });
+  writeFileSync(join(agenticHome, 'codex-home/auth.json'), '{}\n');
+
+  try {
+    const status = await runMaintenanceOnce({
+      projectRoot,
+      runAppServerTaskImpl: async () => ({
+        authRequired: false,
+        threadId: 'thread-quota',
+        reusedThread: true,
+        turnId: 'turn-quota',
+        skillAttached: false,
+        output: '',
+        activity: {
+          output_chars: 0,
+          agent_message_delta_count: 0,
+          assistant_message_count: 0,
+          tool_call_count: 0,
+          item_count: 0,
+          notification_count: 1,
+        },
+        noModelOutput: true,
+        rateLimits: { rateLimits: { credits: { has_credits: false, unlimited: false } } },
+      }),
+      processMaintainerOutputImpl: async () => {
+        throw new Error('controller should not run while Codex quota is exhausted');
+      },
+    });
+
+    assert.equal(status.status, 'WAITING_FOR_CODEX_QUOTA');
+    assert.match(status.message, /agi account switch/);
+    assert.equal(readProjectThreadRef(getMaintainerPaths({ projectRoot })).thread_id, 'thread-quota');
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
+    else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
 test('runMaintenanceOnce records expired Codex auth without running controller', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-auth-'));
   const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
@@ -239,6 +335,7 @@ test('runMaintenanceOnce waits on Codex quota without running controller', async
 
     assert.equal(status.status, 'WAITING_FOR_CODEX_QUOTA');
     assert.match(status.message, /keep watching/);
+    assert.match(status.message, /agi account switch/);
     assert.equal(status.codex_error.kind, CODEX_ERROR_KINDS.QUOTA_EXHAUSTED);
     assert.equal(status.evidence_cursor_path, join(projectRoot, '.agentic-ai/evidence-cursors.json'));
     assert.equal(existsSync(join(projectRoot, '.agentic-ai/patches')), true);

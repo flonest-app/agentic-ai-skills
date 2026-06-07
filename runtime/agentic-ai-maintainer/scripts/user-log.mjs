@@ -74,8 +74,10 @@ export function renderFriendlyEvent(event, payload = {}) {
       return 'Running maintainer review...';
     case 'maintainer.turn.done':
       return renderTurnDone(payload);
+    case 'maintainer.turn.error':
+      return `Maintainer turn failed: ${payload.message || 'unknown error'}`;
     case 'codex.quota.wait':
-      return 'Codex usage limit reached. Agentic AI will keep watching and retry later. No project files were changed.';
+      return 'Codex usage limit reached. Agentic AI will keep watching and retry later. To use another account, run: agi account switch';
     case 'codex.overloaded':
       return 'Codex app-server is busy. Agentic AI will retry later.';
     default:
@@ -85,7 +87,8 @@ export function renderFriendlyEvent(event, payload = {}) {
 
 function renderTurnDone(payload) {
   if (payload.status === 'AUTH_REQUIRED') return 'Codex sign-in is required before Agentic AI can continue.';
-  if (payload.status === 'WAITING_FOR_CODEX_QUOTA') return 'Codex usage limit reached. Agentic AI will keep watching and retry later. No project files were changed.';
+  if (payload.status === 'WAITING_FOR_CODEX_QUOTA') return 'Codex usage limit reached. Agentic AI will keep watching and retry later. To use another account, run: agi account switch';
+  if (payload.status === 'NO_MODEL_OUTPUT') return 'Codex produced no maintainer output. Agentic AI will keep watching and retry later.';
   if (payload.status === 'ERROR') return `Maintainer turn failed: ${payload.message || 'unknown error'}`;
 
   const proposalResults = payload.proposal_results || [];
@@ -115,4 +118,3 @@ function count(value) {
 function plural(value) {
   return count(value) === 1 ? '' : 's';
 }
-

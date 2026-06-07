@@ -35,6 +35,12 @@ In the installed hidden skill, resolve this helper from the skill's `scripts/` d
 
 Only after this bootstrap should the maintainer read selected files or conversation ranges. Avoid open-ended `find`, broad `rg`, and app-server logs unless the bootstrap output gives a specific reason.
 
+Evidence order matters:
+
+1. Read the highest-scoring human/source Codex conversation candidates first, especially those matching active changed files, `AGENTS.md`, or managed skills.
+2. Then read relevant project agent instructions and guidance docs.
+3. Read product code only after chat/docs show a durable rule, skill install, or managed-skill update need.
+
 Do not read full human Codex JSONL files on every turn. The maintainer app-server thread already has prior turn context. Read only unread chat lines with the evidence cursor:
 
 ```bash

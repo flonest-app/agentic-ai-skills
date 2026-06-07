@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -59,14 +59,14 @@ test('installMaintainer passes release tag into the install plan', () => {
   const result = installMaintainer({
     home,
     env: {},
-    releaseTag: 'v0.1.11',
+    releaseTag: 'v0.1.12',
     skipNpmInstall: true,
     updateProfile: false,
   });
 
   assert.equal(
     result.packageSpec,
-    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.11/agentic-ai.tgz',
+    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.12/agentic-ai.tgz',
   );
 });
 
@@ -96,7 +96,7 @@ test('installer downloads release URLs before npm install', () => {
 
 test('installer can fall back to GitHub asset API downloads', () => {
   const cacheDir = mkdtempSync(join(tmpdir(), 'agentic-ai-cache-'));
-  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.11' });
+  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.12' });
   const calls = [];
   const downloaded = prepareNpmPackageSpec({
     packageSpec,
@@ -106,7 +106,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
       calls.push({ command, args, options });
       const url = args.at(-1);
       if (url === packageSpec) return { status: 22 };
-      if (String(url).includes('/releases/tags/v0.1.11')) {
+      if (String(url).includes('/releases/tags/v0.1.12')) {
         return {
           status: 0,
           stdout: JSON.stringify({
@@ -127,7 +127,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
   assert.equal(calls.some((call) => call.args.includes('Accept: application/octet-stream')), true);
   assert.deepEqual(parseGitHubReleasePackageSpec(packageSpec), {
     repository: 'flonest-app/agentic-ai-skills',
-    tag: 'v0.1.11',
+    tag: 'v0.1.12',
     asset: 'agentic-ai.tgz',
   });
   assert.equal(resolveGitHubApiAssetUrl({
@@ -181,7 +181,7 @@ test('installer updates login and shell startup profiles for common shells', () 
   assert.equal(pathIncludesDir(join(home, '.agentic-ai/bin'), `$HOME/.agentic-ai/bin:/usr/bin`, home), true);
 });
 
-test('agi help advertises the no-argument command and not a login command', () => {
+test('agi help advertises the no-argument command and account recovery tools', () => {
   const result = spawnSync(process.execPath, ['bin/agentic-ai.mjs', '--help'], {
     cwd: process.cwd(),
     encoding: 'utf8',
@@ -189,17 +189,76 @@ test('agi help advertises the no-argument command and not a login command', () =
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage:\n  agi/);
-  assert.doesNotMatch(result.stdout, /agi login/);
+  assert.match(result.stdout, /agi account switch/);
+  assert.match(result.stdout, /quota/i);
 });
 
-test('agi login explains that login is automatic', () => {
-  for (const arg of ['login', '--login']) {
+test('agi account commands target only the isolated Agentic AI Codex home', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agentic-ai-account-'));
+  const fakeCodex = join(home, 'codex');
+  const logPath = join(home, 'codex-calls.log');
+  writeFileSync(fakeCodex, [
+    '#!/bin/sh',
+    'printf "%s|%s\\n" "$CODEX_HOME" "$*" >> "$FAKE_CODEX_LOG"',
+    'exit 0',
+    '',
+  ].join('\n'));
+  chmodSync(fakeCodex, 0o755);
+
+  const result = spawnSync(process.execPath, ['bin/agentic-ai.mjs', 'account', 'switch'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENTIC_AI_HOME: join(home, '.agentic-ai'),
+      CODEX_BIN: fakeCodex,
+      FAKE_CODEX_LOG: logPath,
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.deepEqual(readFileSync(logPath, 'utf8').trim().split('\n'), [
+    `${join(home, '.agentic-ai/codex-home')}|logout`,
+    `${join(home, '.agentic-ai/codex-home')}|login --device-auth`,
+  ]);
+});
+
+test('agi login and logout are friendly account aliases, while --login is not needed', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agentic-ai-account-'));
+  const fakeCodex = join(home, 'codex');
+  const logPath = join(home, 'codex-calls.log');
+  writeFileSync(fakeCodex, [
+    '#!/bin/sh',
+    'printf "%s|%s\\n" "$CODEX_HOME" "$*" >> "$FAKE_CODEX_LOG"',
+    'exit 0',
+    '',
+  ].join('\n'));
+  chmodSync(fakeCodex, 0o755);
+
+  for (const arg of ['login', 'logout']) {
     const result = spawnSync(process.execPath, ['bin/agentic-ai.mjs', arg], {
       cwd: process.cwd(),
       encoding: 'utf8',
+      env: {
+        ...process.env,
+        AGENTIC_AI_HOME: join(home, '.agentic-ai'),
+        CODEX_BIN: fakeCodex,
+        FAKE_CODEX_LOG: logPath,
+      },
     });
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /No separate login command is needed/);
+    assert.equal(result.status, 0);
   }
+
+  assert.deepEqual(readFileSync(logPath, 'utf8').trim().split('\n'), [
+    `${join(home, '.agentic-ai/codex-home')}|login --device-auth`,
+    `${join(home, '.agentic-ai/codex-home')}|logout`,
+  ]);
+
+  const flag = spawnSync(process.execPath, ['bin/agentic-ai.mjs', '--login'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(flag.status, 1);
+  assert.match(flag.stderr, /agi account login/);
 });

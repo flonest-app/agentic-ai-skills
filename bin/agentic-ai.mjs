@@ -34,8 +34,18 @@ if (command === 'help' || command === '--help' || command === '-h') {
   process.exit(0);
 }
 
-if (command === 'login' || command === '--login') {
-  console.error('No separate login command is needed. Run `agi`; first-time login starts automatically.');
+if (command === 'account') {
+  const status = runAccountCommand(rest);
+  process.exit(status);
+}
+
+if (command === 'login' || command === 'logout') {
+  const status = runAccountCommand([command, ...rest]);
+  process.exit(status);
+}
+
+if (command === '--login') {
+  console.error('Use `agi account login` for manual account recovery. Normal first-time login still starts automatically from `agi`.');
   process.exit(1);
 }
 
@@ -80,6 +90,21 @@ async function runDefaultAgi(rawArgs) {
     env: childEnv(),
   });
   process.exit(result.status ?? signalExitCode(result.signal) ?? 1);
+}
+
+function runAccountCommand(args) {
+  const action = args[0] || 'status';
+  const passThrough = normalizeProjectArg(args.slice(1));
+  const result = spawnSync(process.execPath, [
+    resolve(scriptRoot, 'codex-account.mjs'),
+    action,
+    ...passThrough,
+  ], {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+    env: childEnv(),
+  });
+  return result.status ?? signalExitCode(result.signal) ?? 1;
 }
 
 async function ensureRuntimeReady(args) {
@@ -169,7 +194,14 @@ Advanced:
   agi status
   agi stop
   agi once
+  agi account status
+  agi account login
+  agi account logout
+  agi account switch
   agi discover --query <text>
   agi reconcile
+
+If Codex quota or account choice blocks the maintainer, run:
+  agi account switch
 `);
 }

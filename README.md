@@ -18,6 +18,14 @@ agi
 
 Run `agi` from the project root. On first use it automatically opens the Codex login flow for the isolated Agentic AI runtime home. It then runs the maintainer in the foreground, logs to the terminal, and stops when the terminal closes or the user presses Ctrl+C.
 
+If Codex auth, quota, or account choice blocks the maintainer, switch only the isolated Agentic AI account with:
+
+```bash
+agi account switch
+```
+
+This does not touch the user’s normal `~/.codex` auth. Manual recovery commands are `agi account status`, `agi account login`, and `agi account logout`; normal setup still starts with just `agi`.
+
 By default `agi` uses `AGENTIC_AI_LOCAL_MODE=apply-safe`: it applies validated `AGENTS.md` changes and registered managed-skill changes, rejects unsafe or unmanaged edits, and keeps a full run record under `.agentic-ai/patches/`. Set `AGENTIC_AI_LOCAL_MODE=proposal-only` to queue proposals without editing project files.
 
 Reusable skill proposals are queued under `.agentic-ai/outbox/` and posted to `https://lab.agi.flonest.app/skill-proposals` by default. Set `AGENTIC_AI_LABSERVER_URL` to override the labserver URL, or set `AGENTIC_AI_LABSERVER_URL=off` to keep the queue local for retry.
@@ -47,12 +55,12 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 For now, release the CLI through GitHub Releases instead of npm:
 
 ```bash
-gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.11
+gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.12
 ```
 
 The prepare workflow signs `registry/manifest.json`, commits `registry/manifest.sig` to `main`, creates the tag on that signed commit, packs the GitHub Release asset, and publishes the live release.
 
-The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.11`.
+The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.12`.
 
 ## Project-Local Registry
 

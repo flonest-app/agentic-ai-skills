@@ -5,7 +5,12 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { initRegistry, listManagedSkills } from './managed-registry.mjs';
-import { DEFAULT_CODEX_SANDBOX, runAppServerTask } from './appserver-task.mjs';
+import {
+  DEFAULT_CODEX_SANDBOX,
+  hasAppServerModelActivity,
+  hasExhaustedCodexCredits,
+  runAppServerTask,
+} from './appserver-task.mjs';
 import { CODEX_ERROR_KINDS, classifyCodexError } from './codex-errors.mjs';
 import { processMaintainerOutput } from './proposal-controller.mjs';
 import { listPendingLabserverRequests, syncLabserverRequests } from './labserver-sync.mjs';
@@ -24,6 +29,7 @@ export const STATUS = {
   RUNNING: 'RUNNING',
   COMPLETED: 'COMPLETED',
   STOPPED: 'STOPPED',
+  NO_MODEL_OUTPUT: 'NO_MODEL_OUTPUT',
   WAITING_FOR_CODEX_QUOTA: 'WAITING_FOR_CODEX_QUOTA',
   ERROR: 'ERROR',
 };
@@ -218,6 +224,7 @@ export async function runMaintenanceOnce({
   runAppServerTaskImpl = runAppServerTask,
   processMaintainerOutputImpl = processMaintainerOutput,
   beginMaintainerProposalImpl = beginMaintainerProposal,
+  changedFiles = [],
 } = {}) {
   const { paths } = initializeMaintainerState({ projectRoot, stateDir, codexHome, sourceCodexHome, historyRoots, model });
   if (!hasCodexAuth(paths.codexHome)) {
@@ -284,6 +291,7 @@ export async function runMaintenanceOnce({
       extraEnv: {
         AGENTIC_AI_PROPOSAL_FILE: paths.activeProposalPath,
         AGENTIC_AI_PROJECT_ROOT: paths.projectRoot,
+        AGENTIC_AI_CHANGED_FILES: JSON.stringify(normalizeChangedFiles(changedFiles)),
       },
     });
 
@@ -323,6 +331,49 @@ export async function runMaintenanceOnce({
       last_trigger_message: triggerMessage || null,
       last_conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
     });
+
+    const proposalActivity = readProposalFileActivity(paths.activeProposalPath, activeProposal.document);
+    const noModelOutput = (result.noModelOutput === true || !hasAppServerModelActivity(result.activity))
+      && proposalActivity.proposal_count === 0
+      && !proposalActivity.updated;
+    if (noModelOutput) {
+      const quotaStatus = hasExhaustedCodexCredits(result.rateLimits)
+        ? statusForCodexError({
+          codexError: classifyCodexError({ message: 'Codex usage limit reached.', rateLimits: result.rateLimits }),
+          paths,
+          projectRoot: paths.projectRoot,
+          stateDir,
+        })
+        : null;
+      if (quotaStatus) return quotaStatus;
+      return writeMaintainerStatus({
+        projectRoot: paths.projectRoot,
+        stateDir,
+        status: STATUS.NO_MODEL_OUTPUT,
+        pid: null,
+        message: 'Codex produced no maintainer output. Agentic AI will keep watching and retry later.',
+        extra: {
+          thread_id: result.threadId,
+          turn_id: result.turnId,
+          reused_thread: result.reusedThread,
+          resume_error: result.resumeError || null,
+          turn_start_error: result.turnStartError || null,
+          first_turn: firstTurn,
+          skill_attached: result.skillAttached,
+          appserver_activity: result.activity || null,
+          proposal_file_activity: proposalActivity,
+          maintainer_proposal_file: activeProposal.path,
+          thread_ref_path: paths.threadRefPath,
+          thread_ref_updated_at: nextThreadRef.updated_at,
+          codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
+          codex_sessions_dir: join(paths.codexHome, 'sessions'),
+          source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
+          source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
+          conversation_evidence_sources: evidenceSources,
+        },
+      });
+    }
+
     const timestamp = new Date().toISOString().replaceAll(':', '-');
     const controller = await processMaintainerOutputImpl({
       projectRoot: paths.projectRoot,
@@ -348,8 +399,13 @@ export async function runMaintenanceOnce({
       revision_requests: revisionRequests.map((request) => request.request_id),
       first_turn: firstTurn,
       skill_attached: result.skillAttached,
+      reused_thread: result.reusedThread,
+      resume_error: result.resumeError || null,
+      turn_start_error: result.turnStartError || null,
+      appserver_activity: result.activity || null,
       maintainer_skill_sha256: maintainerSkillHash,
       trigger_message: triggerMessage || null,
+      changed_files: normalizeChangedFiles(changedFiles),
       conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
       created_at: new Date().toISOString(),
     });
@@ -371,8 +427,11 @@ export async function runMaintenanceOnce({
         thread_id: result.threadId,
         turn_id: result.turnId,
         reused_thread: result.reusedThread,
+        resume_error: result.resumeError || null,
+        turn_start_error: result.turnStartError || null,
         first_turn: firstTurn,
         skill_attached: result.skillAttached,
+        appserver_activity: result.activity || null,
         maintainer_skill_sha256: maintainerSkillHash,
         maintainer_proposal_file: activeProposal.path,
         thread_ref_path: paths.threadRefPath,
@@ -430,7 +489,7 @@ function statusForCodexError({
       stateDir,
       status: STATUS.WAITING_FOR_CODEX_QUOTA,
       pid: null,
-      message: 'Codex usage limit reached. Agentic AI will keep watching and retry later. No project files were changed.',
+      message: 'Codex usage limit reached. Agentic AI will keep watching and retry later. To use another account, run: agi account switch',
       extra: codexErrorStatusExtra({ codexError, paths }),
     });
   }
@@ -568,6 +627,7 @@ export function installHiddenMaintainerSkill(paths) {
     '',
     'This skill is installed in the Agentic AI private Codex home, not in the normal user Codex home or project skill directory.',
     `Helper scripts are available beside this file under \`${join(paths.maintainerSkillDir, 'scripts')}\`. Start each turn with \`node ${join(paths.maintainerSkillDir, 'scripts', 'collect-maintainer-context.mjs')} --project-root "$PWD" --source-codex-home ${paths.sourceCodexHome} --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --limit 20\`.`,
+    'The context helper automatically reads `$AGENTIC_AI_CHANGED_FILES` to rank source Codex chats that mention the active changed files.',
     `When reading human Codex JSONL, use \`node ${join(paths.maintainerSkillDir, 'scripts', 'read-conversation-slice.mjs')} --project-root "$PWD" --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --file <candidate-jsonl> --max-lines 120 --mark-read\` so follow-up turns do not reread old chat lines.`,
     `Write proposals only with \`node ${join(paths.maintainerSkillDir, 'scripts', 'write-maintainer-proposal.mjs')}\`; the active proposal file is \`${paths.activeProposalPath}\` and is also exposed as \`$AGENTIC_AI_PROPOSAL_FILE\`.`,
     '',
@@ -679,6 +739,35 @@ export function isProcessAlive(pid) {
 
 function normalizeRoots(roots, projectRoot) {
   return roots.map((root) => resolve(projectRoot, root));
+}
+
+function normalizeChangedFiles(changedFiles = []) {
+  return Array.from(new Set(
+    changedFiles
+      .map((file) => String(file || '').trim().replaceAll('\\', '/'))
+      .filter(Boolean),
+  )).slice(0, 50);
+}
+
+function readProposalFileActivity(path, initialDocument = {}) {
+  try {
+    const document = JSON.parse(readFileSync(path, 'utf8'));
+    const proposalCount = Array.isArray(document.proposals) ? document.proposals.length : 0;
+    return {
+      valid: true,
+      proposal_count: proposalCount,
+      updated: proposalCount > 0
+        || String(document.updated_at || '') !== String(initialDocument.updated_at || '')
+        || String(document.summary || '') !== String(initialDocument.summary || ''),
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      proposal_count: 0,
+      updated: true,
+      reason: error.message,
+    };
+  }
 }
 
 function writeJson(path, value) {

@@ -25,6 +25,8 @@ node <maintainer_script_dir>/collect-maintainer-context.mjs --project-root "$PWD
 ```
 
 - Use the bootstrap output as the map for the turn. It identifies AGENTS files, repo guidance files, project skills and ownership, managed-skill registry status, git state, and project-relevant source Codex conversation candidates.
+- Evidence priority is source Codex chat first, then project agent/docs guidance, then product code only when chat/docs point to a durable rule or skill need.
+- Conversation candidates that mention active changed files, `AGENTS.md`, or managed skills are more important than generic install/update chats.
 - After bootstrap, read only the selected files needed to decide. Avoid open-ended `find`, broad `rg`, or reading logs unless the bootstrap output shows a specific reason.
 - Do not read full human Codex JSONL files. For each selected conversation candidate, use `read-conversation-slice.mjs` with the project evidence cursor so follow-up turns only see unread lines:
 

@@ -33,13 +33,24 @@ test('collects focused maintainer context before ad hoc exploration', () => {
   mkdirSync(join(sourceCodexHome, 'sessions/2026/06/07'), { recursive: true });
   writeFileSync(
     join(sourceCodexHome, 'sessions/2026/06/07/rollout-test.jsonl'),
-    `${JSON.stringify({ timestamp: '2026-06-07T00:00:00Z', type: 'session_meta', payload: { id: 'thread-1', cwd: projectRoot } })}\n`,
+    [
+      JSON.stringify({ timestamp: '2026-06-07T00:00:00Z', type: 'session_meta', payload: { id: 'thread-1', cwd: projectRoot } }),
+      JSON.stringify({ timestamp: '2026-06-07T00:00:01Z', type: 'message', payload: { text: 'The user corrected src/app.js and asked to update AGENTS.md.' } }),
+      '',
+    ].join('\n'),
   );
 
-  const context = collectMaintainerContext({ projectRoot, sourceCodexHome, cursorPath, limit: 5 });
+  const context = collectMaintainerContext({
+    projectRoot,
+    sourceCodexHome,
+    cursorPath,
+    changedFiles: ['src/app.js'],
+    limit: 5,
+  });
 
   assert.equal(context.project_root, projectRoot);
   assert.equal(context.source_codex_home, sourceCodexHome);
+  assert.deepEqual(context.changed_files, ['src/app.js']);
   assert.equal(context.root_agents_md.exists, true);
   assert.equal(context.agent_instruction_files.some((file) => file.relative_path === 'AGENTS.md'), true);
   assert.equal(context.guidance_files.some((file) => file.relative_path === 'GEMINI.md'), true);
@@ -48,10 +59,13 @@ test('collects focused maintainer context before ad hoc exploration', () => {
   assert.equal(context.project_skills.find((skill) => skill.skill_id === 'unmanaged').ownership, 'user-owned-unmanaged');
   assert.equal(context.managed_skill_verification.ok, true);
   assert.equal(context.conversation_discovery.candidateCount, 1);
+  assert.deepEqual(context.conversation_discovery.candidates[0].matchedChangedFiles, ['src/app.js']);
   assert.equal(context.evidence_cursor_path, cursorPath);
   assert.equal(context.conversation_discovery.candidates[0].cursor.previous_line, 0);
   assert.equal(context.conversation_discovery.candidates[0].cursor.next_unread_line, 1);
   assert.match(context.conversation_discovery.candidates[0].cursor.read_command, /read-conversation-slice\.mjs/);
+  assert.match(context.next_steps.join('\n'), /source Codex conversation candidates/);
+  assert.match(context.next_steps.join('\n'), /Product code comes only after chat\/docs/);
   assert.match(context.next_steps.join('\n'), /write-maintainer-proposal\.mjs/);
   assert.match(context.next_steps.join('\n'), /controller reads the proposal file/);
   assert.match(context.next_steps.join('\n'), /starts at the stored cursor/);

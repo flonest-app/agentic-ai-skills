@@ -31,6 +31,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       console.error(result.codexError.message || 'Codex task failed.');
       process.exit(isBlockingCodexError(result.codexError) ? 2 : 1);
     }
+    if (result.noModelOutput) {
+      console.error('Codex produced no maintainer output.');
+      process.exit(2);
+    }
   } catch (err) {
     console.error(err.message);
     process.exit(1);
@@ -81,28 +85,30 @@ export async function runAppServerTask({
     if (rateLimits?.codexError && rateLimits.codexError.kind !== CODEX_ERROR_KINDS.AUTH_REQUIRED) {
       return blockedTaskResult({ account, codexError: rateLimits.codexError });
     }
-    const reachedType = rateLimits?.rateLimits?.rateLimitReachedType;
-    if (reachedType) {
+    const rateLimitCodexError = codexErrorFromRateLimits(rateLimits);
+    if (rateLimitCodexError) {
       return blockedTaskResult({
         account,
-        codexError: classifyCodexError({
-          message: 'Codex usage limit reached.',
-          rateLimits,
-        }),
+        codexError: rateLimitCodexError,
       });
     }
 
     const input = buildTurnInput({ prompt, skillPath, skillName });
 
     let thread;
+    let resumeError = null;
+    let turnStartError = null;
+    let reusedThread = false;
     try {
-      thread = threadId ? { id: threadId } : await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+      const opened = await openAppServerThread(client, { threadId, model, cwd, approvalPolicy, sandbox, serviceName });
+      thread = opened.thread;
+      reusedThread = opened.reusedThread;
+      resumeError = opened.resumeError;
     } catch (err) {
       const codexError = classifyCodexError(err);
       if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
       throw err;
     }
-    let reusedThread = Boolean(threadId);
     let turn;
     let skillAttached = Boolean(skillPath);
     try {
@@ -111,6 +117,7 @@ export async function runAppServerTask({
       const codexError = classifyCodexError(err);
       if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
       if (!threadId) throw err;
+      turnStartError = safeCodexRequestError(err);
       try {
         thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
       } catch (fallbackErr) {
@@ -132,16 +139,22 @@ export async function runAppServerTask({
       }
     }
     const completed = await client.waitForTurn(turn.id, { stream });
+    const noModelOutput = !hasAppServerModelActivity(completed.activity);
+    const completedRateLimits = completed.rateLimits || rateLimits;
     return {
       authRequired: false,
       threadId: thread.id,
       reusedThread,
+      resumeError,
+      turnStartError,
       turnId: turn.id,
       skillAttached,
       turn: completed.turn,
       output: completed.output,
+      activity: completed.activity,
+      noModelOutput,
       codexError: completed.codexError,
-      rateLimits,
+      rateLimits: completedRateLimits,
     };
   } finally {
     client.stop();
@@ -162,6 +175,56 @@ async function startThread(client, { model, cwd, approvalPolicy, sandbox, servic
     sandbox,
     serviceName,
   })).thread;
+}
+
+export async function openAppServerThread(client, {
+  threadId,
+  model,
+  cwd,
+  approvalPolicy,
+  sandbox,
+  serviceName,
+} = {}) {
+  let resumeError = null;
+  if (threadId) {
+    try {
+      const thread = (await client.request('thread/resume', {
+        threadId,
+        model,
+        cwd,
+        approvalPolicy,
+        sandbox,
+        serviceName,
+        excludeTurns: true,
+      })).thread;
+      return { thread, reusedThread: true, resumeError };
+    } catch (err) {
+      const codexError = classifyCodexError(err);
+      if (isBlockingCodexError(codexError)) throw err;
+      resumeError = safeCodexRequestError(err);
+    }
+  }
+  const thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+  return { thread, reusedThread: false, resumeError };
+}
+
+export function createEmptyAppServerActivity() {
+  return {
+    output_chars: 0,
+    agent_message_delta_count: 0,
+    assistant_message_count: 0,
+    tool_call_count: 0,
+    item_count: 0,
+    notification_count: 0,
+  };
+}
+
+export function hasAppServerModelActivity(activity) {
+  if (!activity) return true;
+  return Number(activity.output_chars || 0) > 0
+    || Number(activity.agent_message_delta_count || 0) > 0
+    || Number(activity.assistant_message_count || 0) > 0
+    || Number(activity.tool_call_count || 0) > 0;
 }
 
 export class MiniAppServerClient extends EventEmitter {
@@ -213,16 +276,30 @@ export class MiniAppServerClient extends EventEmitter {
     return new Promise((resolveWait) => {
       let output = '';
       let latestError = null;
+      let latestRateLimits = null;
+      const activity = createEmptyAppServerActivity();
       const finish = (turn, codexError = null) => {
         this.off('notification', onNotification);
         if (stream) process.stdout.write('\n');
-        resolveWait({ turn, output, codexError });
+        mergeTurnActivity(activity, turn);
+        resolveWait({ turn, output, codexError, activity, rateLimits: latestRateLimits });
       };
       const onNotification = (message) => {
+        activity.notification_count += 1;
         if (message.method === 'item/agentMessage/delta') {
           const delta = message.params?.delta || '';
           output += delta;
+          activity.output_chars += delta.length;
+          activity.agent_message_delta_count += 1;
           if (stream) process.stdout.write(delta);
+        }
+        if (message.method === 'item/started' || message.method === 'item/completed') {
+          recordTurnItemActivity(activity, message.params?.item || message.params);
+        }
+        if (message.method === 'account/rateLimits/updated') {
+          latestRateLimits = message.params || message;
+          const rateLimitCodexError = codexErrorFromRateLimits(latestRateLimits);
+          if (rateLimitCodexError) latestError = rateLimitCodexError;
         }
         if (message.method === 'error') {
           latestError = message.params?.error || message.params || message;
@@ -305,6 +382,87 @@ function isBlockingCodexError(codexError) {
     || codexError?.kind === CODEX_ERROR_KINDS.QUOTA_EXHAUSTED
     || codexError?.kind === CODEX_ERROR_KINDS.RATE_LIMITED
     || codexError?.kind === CODEX_ERROR_KINDS.APP_SERVER_OVERLOADED;
+}
+
+function codexErrorFromRateLimits(rateLimits) {
+  if (!rateLimits) return null;
+  const reachedType = findFirstKey(rateLimits, [
+    'rateLimitReachedType',
+    'rate_limit_reached_type',
+    'rate_limit_type',
+  ]);
+  if (!reachedType) return null;
+  return classifyCodexError({
+    message: 'Codex usage limit reached.',
+    rateLimitReachedType: reachedType,
+    rateLimits,
+  });
+}
+
+export function hasExhaustedCodexCredits(rateLimits) {
+  if (!rateLimits) return false;
+  const credits = findFirstKey(rateLimits, ['credits']);
+  if (!credits || typeof credits !== 'object') return false;
+  const hasCredits = credits.hasCredits ?? credits.has_credits;
+  const unlimited = credits.unlimited ?? credits.is_unlimited;
+  return hasCredits === false && unlimited !== true;
+}
+
+function mergeTurnActivity(activity, turn) {
+  for (const item of collectTurnItems(turn)) recordTurnItemActivity(activity, item);
+}
+
+function collectTurnItems(turn) {
+  if (!turn || typeof turn !== 'object') return [];
+  const itemLists = [
+    turn.items,
+    turn.itemsView?.items,
+    turn.outputItems,
+    turn.output_items,
+  ].filter(Array.isArray);
+  return itemLists.flat();
+}
+
+function recordTurnItemActivity(activity, item) {
+  const value = item?.item && typeof item.item === 'object' ? item.item : item;
+  if (!value || typeof value !== 'object') return;
+  activity.item_count += 1;
+  const type = String(value.type || value.kind || '').toLowerCase();
+  const role = String(value.role || '').toLowerCase();
+  const name = String(value.name || value.toolName || value.tool_name || '').toLowerCase();
+  if (role === 'assistant' || /agentmessage|assistant[_-]?message|message/.test(type)) {
+    activity.assistant_message_count += 1;
+  }
+  if (/tool|function|exec|command|shell/.test(type) || /tool|function|exec|command|shell/.test(name)) {
+    activity.tool_call_count += 1;
+  }
+}
+
+function findFirstKey(value, names) {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstKey(item, names);
+      if (found !== null && found !== undefined) return found;
+    }
+    return null;
+  }
+  for (const name of names) {
+    if (Object.hasOwn(value, name)) return value[name];
+  }
+  for (const nested of Object.values(value)) {
+    const found = findFirstKey(nested, names);
+    if (found !== null && found !== undefined) return found;
+  }
+  return null;
+}
+
+function safeCodexRequestError(err) {
+  return {
+    message: err?.message || String(err),
+    codex_error: err?.codexError || classifyCodexError(err),
+    raw_codex_error: err?.rawCodexError || null,
+  };
 }
 
 function appendDiagnostic(path, text) {

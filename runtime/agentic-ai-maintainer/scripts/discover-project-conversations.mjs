@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, extname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
@@ -16,6 +16,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     projectName: args.projectName,
     searchRoots: args.searchRoots,
     sourceCodexHome: args.sourceCodexHome,
+    changedFiles: args.changedFiles,
     limit: args.limit,
   });
   console.log(JSON.stringify(result, null, 2));
@@ -26,17 +27,20 @@ export function discoverProjectConversations({
   projectName,
   searchRoots = [],
   sourceCodexHome = join(homedir(), '.codex'),
+  changedFiles = [],
   limit = 50,
 } = {}) {
   const root = resolve(projectRoot);
   const name = projectName || basename(root);
-  const terms = Array.from(new Set([root, name].filter((term) => term && term.length >= 3)));
+  const projectTerms = Array.from(new Set([root, name].filter((term) => term && term.length >= 3)));
+  const changedFileTerms = normalizeChangedFileTerms(changedFiles, root);
+  const terms = Array.from(new Set([...projectTerms, ...changedFileTerms]));
   const roots = searchRoots.length > 0
     ? searchRoots.map((searchRoot) => resolve(searchRoot))
     : defaultConversationSearchRoots({ projectRoot: root, sourceCodexHome });
 
   const candidates = discoverCandidatePaths({ terms, searchRoots: roots })
-    .map((filePath) => inspectConversationCandidate({ filePath, terms }))
+    .map((filePath) => inspectConversationCandidate({ filePath, terms, projectTerms, changedFileTerms }))
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score || b.lastModifiedMs - a.lastModifiedMs)
     .slice(0, Number(limit || 50));
@@ -44,6 +48,7 @@ export function discoverProjectConversations({
   return {
     projectRoot: root,
     projectName: name,
+    changedFiles: normalizeChangedFiles(changedFiles, root),
     searchRoots: roots,
     candidateCount: candidates.length,
     candidates,
@@ -138,7 +143,7 @@ function walk(currentPath, files, terms) {
   if (terms.some((term) => lower.includes(term.toLowerCase()))) files.add(resolve(currentPath));
 }
 
-export function inspectConversationCandidate({ filePath, terms }) {
+export function inspectConversationCandidate({ filePath, terms, projectTerms = terms, changedFileTerms = [] }) {
   const stat = statSync(filePath);
   const ext = extname(filePath).toLowerCase();
   const pathLower = filePath.toLowerCase();
@@ -153,8 +158,15 @@ export function inspectConversationCandidate({ filePath, terms }) {
     if (stat.size <= MAX_READ_BYTES && TEXT_FILE_RE.test(filePath)) text = readFileSync(filePath, 'utf8');
   } catch {}
 
-  const matchedTerms = terms.filter((term) => text.toLowerCase().includes(term.toLowerCase()));
-  if (matchedTerms.length > 0) scoreParts.push(['project_match', matchedTerms.length * 4]);
+  const lowerText = text.toLowerCase();
+  const matchedTerms = terms.filter((term) => lowerText.includes(term.toLowerCase()));
+  const matchedProjectTerms = projectTerms.filter((term) => lowerText.includes(term.toLowerCase()));
+  const matchedChangedFiles = changedFileTerms.filter((term) => lowerText.includes(term.toLowerCase()));
+  if (matchedProjectTerms.length > 0) scoreParts.push(['project_match', matchedProjectTerms.length * 4]);
+  if (matchedChangedFiles.length > 0) scoreParts.push(['changed_file_match', matchedChangedFiles.length * 10]);
+  if (/\bAGENTS\.md\b|\.agents\/skills|managed skill|agentic-ai-managed/i.test(text)) {
+    scoreParts.push(['agent_guidance_or_skill_match', 3]);
+  }
   const jsonl = ext === '.jsonl' ? inspectJsonl(text) : {};
   const score = scoreParts.reduce((total, [, value]) => total + value, 0);
   return {
@@ -166,8 +178,34 @@ export function inspectConversationCandidate({ filePath, terms }) {
     bytes: stat.size,
     lineCount: text ? countLines(text) : null,
     matchedTerms,
+    matchedProjectTerms,
+    matchedChangedFiles,
     ...jsonl,
   };
+}
+
+function normalizeChangedFiles(changedFiles = [], projectRoot) {
+  return Array.from(new Set(
+    changedFiles
+      .map((file) => String(file || '').trim())
+      .filter(Boolean)
+      .map((file) => {
+        const normalized = file.replaceAll('\\', '/');
+        if (normalized.startsWith('/')) return relative(projectRoot, normalized).replaceAll('\\', '/');
+        return normalized;
+      })
+      .filter((file) => file && !file.startsWith('..')),
+  )).slice(0, 50);
+}
+
+function normalizeChangedFileTerms(changedFiles = [], projectRoot) {
+  const terms = new Set();
+  for (const file of normalizeChangedFiles(changedFiles, projectRoot)) {
+    if (file.length >= 3) terms.add(file);
+    const name = basename(file);
+    if (name.length >= 5 && !/^(?:index|main|app)\.[A-Za-z0-9]+$/.test(name)) terms.add(name);
+  }
+  return Array.from(terms);
 }
 
 function inspectJsonl(text) {
@@ -205,16 +243,17 @@ function countLines(text) {
 }
 
 function parseArgs(argv) {
-  const parsed = { searchRoots: [], limit: 50 };
+  const parsed = { searchRoots: [], changedFiles: [], limit: 50 };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--project-root') parsed.projectRoot = argv[++i];
     else if (arg === '--project-name') parsed.projectName = argv[++i];
     else if (arg === '--search-root') parsed.searchRoots.push(argv[++i]);
     else if (arg === '--source-codex-home') parsed.sourceCodexHome = argv[++i];
+    else if (arg === '--changed-file') parsed.changedFiles.push(argv[++i]);
     else if (arg === '--limit') parsed.limit = Number(argv[++i]);
     else if (arg === '--help') {
-      console.log('Usage: discover-project-conversations.mjs --project-root <repo> [--source-codex-home ~/.codex] [--search-root path]');
+      console.log('Usage: discover-project-conversations.mjs --project-root <repo> [--source-codex-home ~/.codex] [--search-root path] [--changed-file path]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

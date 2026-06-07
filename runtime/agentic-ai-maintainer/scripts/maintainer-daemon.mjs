@@ -87,6 +87,7 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [], logger 
       conversationFile: args.conversationFile,
       triggerMessage: message,
       model: args.model,
+      changedFiles,
     });
 
   if (status.status === 'AUTH_REQUIRED' && !args.reauthAttempted) {
@@ -112,6 +113,7 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [], logger 
         conversationFile: args.conversationFile,
         triggerMessage: message,
         model: args.model,
+        changedFiles,
       });
     }
   }
@@ -139,26 +141,34 @@ async function runWatchLoop({ projectRoot, args, idleMs, pollMs, logger }) {
   logEvent(logger, 'watch.started', { project_root: projectRoot, idle_ms: idleMs, poll_ms: pollMs });
   let previous = collectProjectFileState(projectRoot);
   let pending = null;
+  let activeTurn = null;
 
   while (!shouldStop({ projectRoot })) {
     await sleep(pollMs);
+    if (activeTurn?.done) {
+      await activeTurn.promise;
+      activeTurn = null;
+      previous = collectProjectFileState(projectRoot);
+      if (pending) pending = { ...pending, changedAt: Date.now() };
+    }
+
     const next = collectProjectFileState(projectRoot);
     const changedFiles = diffProjectFileState(previous, next);
     if (changedFiles.length > 0) {
-      const files = new Set([...(pending?.files || []), ...changedFiles]);
-      pending = { changedAt: Date.now(), files: Array.from(files).slice(0, 50) };
+      pending = mergePendingChangedFiles(pending, changedFiles, Date.now());
       previous = next;
       logEvent(logger, 'watch.change', { project_root: projectRoot, changed_files: pending.files });
     }
 
-    if (pending && Date.now() - pending.changedAt >= idleMs) {
+    if (pending && !activeTurn && Date.now() - pending.changedAt >= idleMs) {
       const files = pending.files;
       pending = null;
       logEvent(logger, 'watch.idle_trigger', { project_root: projectRoot, changed_files: files });
-      await runMaintainerTurn({ projectRoot, args, changedFiles: files, logger });
-      previous = collectProjectFileState(projectRoot);
+      activeTurn = startQueuedMaintainerTurn({ projectRoot, args, changedFiles: files, logger });
     }
   }
+
+  if (activeTurn) await activeTurn.promise;
 }
 
 function parseArgs(argv) {
@@ -221,6 +231,27 @@ export function diffProjectFileState(previous, next) {
   return changed.sort();
 }
 
+export function mergePendingChangedFiles(pending, changedFiles = [], changedAt = Date.now()) {
+  const files = new Set([...(pending?.files || []), ...changedFiles]);
+  return { changedAt, files: Array.from(files).slice(0, 50) };
+}
+
+function startQueuedMaintainerTurn({ projectRoot, args, changedFiles, logger }) {
+  const state = { done: false, promise: null };
+  state.promise = runMaintainerTurn({ projectRoot, args, changedFiles, logger })
+    .catch((error) => {
+      logEvent(logger, 'maintainer.turn.error', {
+        project_root: projectRoot,
+        message: error.message,
+        level: 'error',
+      });
+    })
+    .finally(() => {
+      state.done = true;
+    });
+  return state;
+}
+
 function walk(root, currentPath, state) {
   let stat;
   try {
@@ -251,7 +282,23 @@ function walk(root, currentPath, state) {
 
 function shouldSkipPath(rel, name) {
   if (!rel || rel === '.') return false;
-  if (['.git', 'node_modules', '.agentic-ai', 'runtime', 'dist', 'build', 'coverage'].includes(name)) return true;
+  if ([
+    '.git',
+    'node_modules',
+    '.agentic-ai',
+    'runtime',
+    'dist',
+    'build',
+    'coverage',
+    '__pycache__',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.venv',
+    'venv',
+  ].includes(name)) return true;
+  if (/\.(?:pyc|pyo)$/i.test(name)) return true;
   if (rel.startsWith('.git/') || rel.startsWith('node_modules/') || rel.startsWith('.agentic-ai/')) return true;
   return false;
 }

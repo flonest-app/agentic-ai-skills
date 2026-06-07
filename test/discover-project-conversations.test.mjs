@@ -60,3 +60,50 @@ test('discovers Codex session artifacts that mention the project', () => {
   assert.equal(result.candidates[0].cwd, projectRoot);
   assert.deepEqual(result.candidates[0].detectedIds, ['thread-1']);
 });
+
+test('ranks source Codex sessions that mention changed files above generic project chats', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-project-'));
+  const sourceCodexHome = mkdtempSync(join(tmpdir(), 'agentic-ai-source-codex-'));
+  const sessionDir = join(sourceCodexHome, 'sessions/2026/06/07');
+  mkdirSync(sessionDir, { recursive: true });
+
+  const genericPath = join(sessionDir, 'rollout-install.jsonl');
+  const relevantPath = join(sessionDir, 'rollout-coding.jsonl');
+  writeFileSync(genericPath, [
+    JSON.stringify({
+      type: 'session_meta',
+      timestamp: '2026-06-07T00:00:00.000Z',
+      payload: { id: 'thread-install', cwd: projectRoot },
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-06-07T00:00:01.000Z',
+      payload: { text: `Installed Agentic AI in ${projectRoot}` },
+    }),
+    '',
+  ].join('\n'));
+  writeFileSync(relevantPath, [
+    JSON.stringify({
+      type: 'session_meta',
+      timestamp: '2026-06-07T01:00:00.000Z',
+      payload: { id: 'thread-coding', cwd: projectRoot },
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-06-07T01:00:01.000Z',
+      payload: { text: `The user corrected behavior in src/workflow.ts and mentioned AGENTS.md` },
+    }),
+    '',
+  ].join('\n'));
+
+  const result = discoverProjectConversations({
+    projectRoot,
+    sourceCodexHome,
+    changedFiles: ['src/workflow.ts'],
+  });
+
+  assert.equal(result.candidates[0].filePath, relevantPath);
+  assert.equal(result.candidates[0].scoreParts.changed_file_match, 20);
+  assert.equal(result.candidates[0].scoreParts.agent_guidance_or_skill_match, 3);
+  assert.deepEqual(result.candidates[0].matchedChangedFiles, ['src/workflow.ts', 'workflow.ts']);
+});

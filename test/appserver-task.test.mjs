@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CODEX_ERROR_KINDS } from '../runtime/agentic-ai-maintainer/scripts/codex-errors.mjs';
-import { MiniAppServerClient, shouldMirrorCodexDiagnosticLine } from '../runtime/agentic-ai-maintainer/scripts/appserver-task.mjs';
+import {
+  MiniAppServerClient,
+  hasAppServerModelActivity,
+  hasExhaustedCodexCredits,
+  openAppServerThread,
+  shouldMirrorCodexDiagnosticLine,
+} from '../runtime/agentic-ai-maintainer/scripts/appserver-task.mjs';
 
 test('suppresses noisy Codex app-server loader warnings from terminal mirroring', () => {
   assert.equal(shouldMirrorCodexDiagnosticLine('default prompt too long for skill ngs-analysis'), false);
@@ -39,6 +45,57 @@ test('captures failed turn Codex usage errors', async () => {
   assert.equal(result.codexError.rate_limit_reached_type, 'workspace_member_usage_limit_reached');
 });
 
+test('resumes stored app-server thread before starting followup turns', async () => {
+  const calls = [];
+  const client = {
+    async request(method, params) {
+      calls.push({ method, params });
+      if (method === 'thread/resume') return { thread: { id: params.threadId } };
+      throw new Error(`unexpected request: ${method}`);
+    },
+  };
+
+  const result = await openAppServerThread(client, {
+    threadId: 'thread-1',
+    model: 'gpt-5.5',
+    cwd: '/tmp/project',
+    approvalPolicy: 'never',
+    sandbox: 'workspace-write',
+    serviceName: 'agentic_ai_maintainer',
+  });
+
+  assert.equal(result.thread.id, 'thread-1');
+  assert.equal(result.reusedThread, true);
+  assert.deepEqual(calls.map((call) => call.method), ['thread/resume']);
+  assert.equal(calls[0].params.excludeTurns, true);
+});
+
+test('falls back to a fresh app-server thread when stored thread cannot be resumed', async () => {
+  const calls = [];
+  const client = {
+    async request(method, params) {
+      calls.push({ method, params });
+      if (method === 'thread/resume') throw new Error('thread not found');
+      if (method === 'thread/start') return { thread: { id: 'thread-2' } };
+      throw new Error(`unexpected request: ${method}`);
+    },
+  };
+
+  const result = await openAppServerThread(client, {
+    threadId: 'thread-1',
+    model: 'gpt-5.5',
+    cwd: '/tmp/project',
+    approvalPolicy: 'never',
+    sandbox: 'workspace-write',
+    serviceName: 'agentic_ai_maintainer',
+  });
+
+  assert.equal(result.thread.id, 'thread-2');
+  assert.equal(result.reusedThread, false);
+  assert.match(result.resumeError.message, /thread not found/);
+  assert.deepEqual(calls.map((call) => call.method), ['thread/resume', 'thread/start']);
+});
+
 test('does not stop on retryable app-server error notification', async () => {
   const client = new MiniAppServerClient({ cwd: process.cwd() });
   const waiting = client.waitForTurn('turn-2');
@@ -63,4 +120,41 @@ test('does not stop on retryable app-server error notification', async () => {
   const result = await waiting;
   assert.equal(result.output, 'done');
   assert.equal(result.codexError, null);
+  assert.equal(hasAppServerModelActivity(result.activity), true);
+  assert.equal(result.activity.output_chars, 4);
+  assert.equal(result.activity.agent_message_delta_count, 1);
+});
+
+test('tracks tool activity and identifies truly empty turns', async () => {
+  const activeClient = new MiniAppServerClient({ cwd: process.cwd() });
+  const activeWaiting = activeClient.waitForTurn('turn-3');
+  activeClient.emit('notification', {
+    method: 'item/completed',
+    params: { item: { type: 'function_call', name: 'shell' } },
+  });
+  activeClient.emit('notification', {
+    method: 'turn/completed',
+    params: { turn: { id: 'turn-3', status: 'completed' } },
+  });
+  const activeResult = await activeWaiting;
+  assert.equal(hasAppServerModelActivity(activeResult.activity), true);
+  assert.equal(activeResult.activity.tool_call_count, 1);
+
+  const emptyClient = new MiniAppServerClient({ cwd: process.cwd() });
+  const emptyWaiting = emptyClient.waitForTurn('turn-4');
+  emptyClient.emit('notification', {
+    method: 'turn/completed',
+    params: { turn: { id: 'turn-4', status: 'completed' } },
+  });
+  const emptyResult = await emptyWaiting;
+  assert.equal(hasAppServerModelActivity(emptyResult.activity), false);
+});
+
+test('detects exhausted Codex credits from rate limit payloads', () => {
+  assert.equal(hasExhaustedCodexCredits({
+    rateLimits: { credits: { has_credits: false, unlimited: false } },
+  }), true);
+  assert.equal(hasExhaustedCodexCredits({
+    rateLimits: { credits: { hasCredits: false, unlimited: true } },
+  }), false);
 });

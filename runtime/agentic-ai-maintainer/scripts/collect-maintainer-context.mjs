@@ -30,6 +30,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     projectRoot: args.projectRoot,
     sourceCodexHome: args.sourceCodexHome,
     cursorPath: args.cursorPath,
+    changedFiles: args.changedFiles,
     limit: args.limit,
   });
   console.log(JSON.stringify(result, null, 2));
@@ -39,15 +40,18 @@ export function collectMaintainerContext({
   projectRoot = process.cwd(),
   sourceCodexHome = join(homedir(), '.codex'),
   cursorPath = defaultEvidenceCursorPath(projectRoot),
+  changedFiles = null,
   limit = 20,
 } = {}) {
   const root = resolve(projectRoot);
   const sourceHome = resolve(sourceCodexHome);
+  const normalizedChangedFiles = normalizeChangedFiles(changedFiles ?? changedFilesFromEnv(), root);
   const managedSkills = safe(() => listManagedSkills({ projectRoot: root }), []);
   const managedVerification = safe(() => verifyManagedSkills({ projectRoot: root }), { ok: true, skills: [] });
   const conversationDiscovery = safe(() => discoverProjectConversations({
     projectRoot: root,
     sourceCodexHome: sourceHome,
+    changedFiles: normalizedChangedFiles,
     limit,
   }), {
     projectRoot: root,
@@ -66,6 +70,7 @@ export function collectMaintainerContext({
     source_codex_session_index_path: join(sourceHome, 'session_index.jsonl'),
     source_codex_sessions_dir: join(sourceHome, 'sessions'),
     evidence_cursor_path: resolve(cursorPath),
+    changed_files: normalizedChangedFiles,
     root_agents_md: inspectFile(join(root, 'AGENTS.md'), root),
     agent_instruction_files: discoverAgentInstructionFiles(root),
     guidance_files: discoverGuidanceFiles(root),
@@ -85,7 +90,8 @@ export function collectMaintainerContext({
       })),
     },
     next_steps: [
-      'Read only the most relevant files from agent_instruction_files, guidance_files, project_skills, and conversation_discovery.candidates.',
+      'First inspect the highest-scoring human/source Codex conversation candidates, especially matches for changed_files, AGENTS.md, or managed skills.',
+      'Then read relevant agent_instruction_files and guidance_files. Product code comes only after chat/docs show a durable rule or skill need.',
       'For human Codex JSONL, use read-conversation-slice.mjs; it starts at the stored cursor and prevents rereading full chats.',
       'Do not read isolated maintainer Codex sessions as project evidence.',
       'Use managed_skill_verification before proposing managed-skill updates or removals.',
@@ -248,6 +254,8 @@ function trimConversationCandidate({ candidate, projectRoot, cursorPath }) {
     bytes: candidate.bytes,
     lineCount: candidate.lineCount,
     matchedTerms: candidate.matchedTerms,
+    matchedProjectTerms: candidate.matchedProjectTerms,
+    matchedChangedFiles: candidate.matchedChangedFiles,
     firstTimestamp: candidate.firstTimestamp,
     cwd: candidate.cwd,
     detectedIds: candidate.detectedIds,
@@ -277,16 +285,37 @@ function normalizeRel(path) {
   return path.replaceAll('\\', '/');
 }
 
+function changedFilesFromEnv(env = process.env) {
+  const value = env.AGENTIC_AI_CHANGED_FILES;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return String(value).split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function normalizeChangedFiles(changedFiles = [], projectRoot) {
+  return Array.from(new Set(
+    changedFiles
+      .map((file) => String(file || '').trim().replaceAll('\\', '/'))
+      .filter(Boolean)
+      .map((file) => file.startsWith('/') ? relative(projectRoot, file).replaceAll('\\', '/') : file)
+      .filter((file) => file && !file.startsWith('..')),
+  )).slice(0, 50);
+}
+
 function parseArgs(argv) {
-  const parsed = { limit: 20 };
+  const parsed = { changedFiles: [], limit: 20 };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--project-root') parsed.projectRoot = argv[++i];
     else if (arg === '--source-codex-home') parsed.sourceCodexHome = argv[++i];
     else if (arg === '--cursor-path') parsed.cursorPath = argv[++i];
+    else if (arg === '--changed-file') parsed.changedFiles.push(argv[++i]);
     else if (arg === '--limit') parsed.limit = Number(argv[++i]);
     else if (arg === '--help') {
-      console.log('Usage: collect-maintainer-context.mjs [--project-root repo] [--source-codex-home ~/.codex] [--cursor-path .agentic-ai/evidence-cursors.json] [--limit 20]');
+      console.log('Usage: collect-maintainer-context.mjs [--project-root repo] [--source-codex-home ~/.codex] [--cursor-path .agentic-ai/evidence-cursors.json] [--changed-file path] [--limit 20]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

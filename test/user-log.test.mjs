@@ -26,7 +26,11 @@ test('renders friendly maintainer messages without raw JSON shape', () => {
   );
   assert.equal(
     renderFriendlyEvent('codex.quota.wait'),
-    'Codex usage limit reached. Agentic AI will keep watching and retry later. No project files were changed.',
+    'Codex usage limit reached. Agentic AI will keep watching and retry later. To use another account, run: agi account switch',
+  );
+  assert.equal(
+    renderFriendlyEvent('maintainer.turn.done', { status: 'NO_MODEL_OUTPUT' }),
+    'Codex produced no maintainer output. Agentic AI will keep watching and retry later.',
   );
   assert.match(
     renderFriendlyEvent('maintainer.turn.done', {
