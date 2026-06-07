@@ -59,14 +59,14 @@ test('installMaintainer passes release tag into the install plan', () => {
   const result = installMaintainer({
     home,
     env: {},
-    releaseTag: 'v0.1.13',
+    releaseTag: 'v0.1.14',
     skipNpmInstall: true,
     updateProfile: false,
   });
 
   assert.equal(
     result.packageSpec,
-    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.13/agentic-ai.tgz',
+    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.14/agentic-ai.tgz',
   );
 });
 
@@ -96,7 +96,7 @@ test('installer downloads release URLs before npm install', () => {
 
 test('installer can fall back to GitHub asset API downloads', () => {
   const cacheDir = mkdtempSync(join(tmpdir(), 'agentic-ai-cache-'));
-  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.13' });
+  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.14' });
   const calls = [];
   const downloaded = prepareNpmPackageSpec({
     packageSpec,
@@ -106,7 +106,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
       calls.push({ command, args, options });
       const url = args.at(-1);
       if (url === packageSpec) return { status: 22 };
-      if (String(url).includes('/releases/tags/v0.1.13')) {
+      if (String(url).includes('/releases/tags/v0.1.14')) {
         return {
           status: 0,
           stdout: JSON.stringify({
@@ -127,7 +127,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
   assert.equal(calls.some((call) => call.args.includes('Accept: application/octet-stream')), true);
   assert.deepEqual(parseGitHubReleasePackageSpec(packageSpec), {
     repository: 'flonest-app/agentic-ai-skills',
-    tag: 'v0.1.13',
+    tag: 'v0.1.14',
     asset: 'agentic-ai.tgz',
   });
   assert.equal(resolveGitHubApiAssetUrl({

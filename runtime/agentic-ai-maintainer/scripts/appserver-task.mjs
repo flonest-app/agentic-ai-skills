@@ -96,14 +96,12 @@ export async function runAppServerTask({
     const input = buildTurnInput({ prompt, skillPath, skillName });
 
     let thread;
-    let resumeError = null;
     let turnStartError = null;
     let reusedThread = false;
     try {
       const opened = await openAppServerThread(client, { threadId, model, cwd, approvalPolicy, sandbox, serviceName });
       thread = opened.thread;
       reusedThread = opened.reusedThread;
-      resumeError = opened.resumeError;
     } catch (err) {
       const codexError = classifyCodexError(err);
       if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
@@ -116,27 +114,8 @@ export async function runAppServerTask({
     } catch (err) {
       const codexError = classifyCodexError(err);
       if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
-      if (!threadId) throw err;
       turnStartError = safeCodexRequestError(err);
-      try {
-        thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
-      } catch (fallbackErr) {
-        const fallbackCodexError = classifyCodexError(fallbackErr);
-        if (isBlockingCodexError(fallbackCodexError)) return blockedTaskResult({ account, codexError: fallbackCodexError });
-        throw fallbackErr;
-      }
-      reusedThread = false;
-      const fallbackInput = skillPath
-        ? input
-        : buildTurnInput({ prompt, skillPath: fallbackSkillPath, skillName });
-      skillAttached = Boolean(skillPath || fallbackSkillPath);
-      try {
-        turn = (await client.request('turn/start', { threadId: thread.id, input: fallbackInput, cwd }, 30000)).turn;
-      } catch (fallbackErr) {
-        const fallbackCodexError = classifyCodexError(fallbackErr);
-        if (isBlockingCodexError(fallbackCodexError)) return blockedTaskResult({ account, codexError: fallbackCodexError });
-        throw fallbackErr;
-      }
+      throw Object.assign(err, { turnStartError });
     }
     const completed = await client.waitForTurn(turn.id, { stream });
     const noModelOutput = !hasAppServerModelActivity(completed.activity);
@@ -145,7 +124,7 @@ export async function runAppServerTask({
       authRequired: false,
       threadId: thread.id,
       reusedThread,
-      resumeError,
+      resumeError: null,
       turnStartError,
       turnId: turn.id,
       skillAttached,
@@ -185,27 +164,20 @@ export async function openAppServerThread(client, {
   sandbox,
   serviceName,
 } = {}) {
-  let resumeError = null;
   if (threadId) {
-    try {
-      const thread = (await client.request('thread/resume', {
-        threadId,
-        model,
-        cwd,
-        approvalPolicy,
-        sandbox,
-        serviceName,
-        excludeTurns: true,
-      })).thread;
-      return { thread, reusedThread: true, resumeError };
-    } catch (err) {
-      const codexError = classifyCodexError(err);
-      if (isBlockingCodexError(codexError)) throw err;
-      resumeError = safeCodexRequestError(err);
-    }
+    const thread = (await client.request('thread/resume', {
+      threadId,
+      model,
+      cwd,
+      approvalPolicy,
+      sandbox,
+      serviceName,
+      excludeTurns: true,
+    })).thread;
+    return { thread, reusedThread: true, resumeError: null };
   }
   const thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
-  return { thread, reusedThread: false, resumeError };
+  return { thread, reusedThread: false, resumeError: null };
 }
 
 export function createEmptyAppServerActivity() {
@@ -250,9 +222,7 @@ export class MiniAppServerClient extends EventEmitter {
     this.proc.stderr.on('data', (chunk) => this.handleStderr(chunk));
     createInterface({ input: this.proc.stdout }).on('line', (line) => this.handleLine(line));
 
-    await this.request('initialize', {
-      clientInfo: { name: 'agentic_ai_lite', title: 'Agentic AI Lite', version: '0.1.0' },
-    }, 15000);
+    await this.request('initialize', buildInitializeParams(), 15000);
     this.notify('initialized', {});
   }
 
@@ -367,6 +337,16 @@ export function shouldMirrorCodexDiagnosticLine(line) {
   if (!text) return false;
   if (/ExperimentalWarning|default prompt too long|icon paths|plugin|skill loader|skill.*warning/i.test(text)) return false;
   return /\b(error|fatal|panic|failed|auth|unauthorized|forbidden|quota|usage limit|rate limit|too many requests|credits|spend cap|429|server overloaded)\b/i.test(text);
+}
+
+export function buildInitializeParams() {
+  return {
+    clientInfo: { name: 'agentic_ai_lite', title: 'Agentic AI Lite', version: '0.1.0' },
+    capabilities: {
+      experimentalApi: true,
+      requestAttestation: false,
+    },
+  };
 }
 
 function blockedTaskResult({ account = null, codexError }) {

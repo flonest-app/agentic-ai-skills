@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { CODEX_ERROR_KINDS } from '../runtime/agentic-ai-maintainer/scripts/codex-errors.mjs';
 import {
   MiniAppServerClient,
+  buildInitializeParams,
   hasAppServerModelActivity,
   hasExhaustedCodexCredits,
   openAppServerThread,
@@ -20,6 +21,16 @@ test('mirrors actionable Codex app-server diagnostics', () => {
   assert.equal(shouldMirrorCodexDiagnosticLine('fatal: unauthorized account'), true);
   assert.equal(shouldMirrorCodexDiagnosticLine('Usage limit reached. You have reached your usage limit.'), true);
   assert.equal(shouldMirrorCodexDiagnosticLine('Server overloaded; retry later.'), true);
+});
+
+test('initializes app-server with experimental API capability for cheap resume', () => {
+  assert.deepEqual(buildInitializeParams(), {
+    clientInfo: { name: 'agentic_ai_lite', title: 'Agentic AI Lite', version: '0.1.0' },
+    capabilities: {
+      experimentalApi: true,
+      requestAttestation: false,
+    },
+  });
 });
 
 test('captures failed turn Codex usage errors', async () => {
@@ -70,30 +81,25 @@ test('resumes stored app-server thread before starting followup turns', async ()
   assert.equal(calls[0].params.excludeTurns, true);
 });
 
-test('falls back to a fresh app-server thread when stored thread cannot be resumed', async () => {
+test('does not create a fresh thread when stored thread resume fails', async () => {
   const calls = [];
   const client = {
     async request(method, params) {
       calls.push({ method, params });
       if (method === 'thread/resume') throw new Error('thread not found');
-      if (method === 'thread/start') return { thread: { id: 'thread-2' } };
       throw new Error(`unexpected request: ${method}`);
     },
   };
 
-  const result = await openAppServerThread(client, {
+  await assert.rejects(() => openAppServerThread(client, {
     threadId: 'thread-1',
     model: 'gpt-5.5',
     cwd: '/tmp/project',
     approvalPolicy: 'never',
     sandbox: 'workspace-write',
     serviceName: 'agentic_ai_maintainer',
-  });
-
-  assert.equal(result.thread.id, 'thread-2');
-  assert.equal(result.reusedThread, false);
-  assert.match(result.resumeError.message, /thread not found/);
-  assert.deepEqual(calls.map((call) => call.method), ['thread/resume', 'thread/start']);
+  }), /thread not found/);
+  assert.deepEqual(calls.map((call) => call.method), ['thread/resume']);
 });
 
 test('does not stop on retryable app-server error notification', async () => {
