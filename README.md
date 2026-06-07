@@ -20,9 +20,9 @@ Run `agi` from the project root. On first use it automatically opens the Codex l
 
 By default `agi` uses `AGENTIC_AI_LOCAL_MODE=apply-safe`: it applies validated `AGENTS.md` changes and registered managed-skill changes, rejects unsafe or unmanaged edits, and keeps a full run record under `.agentic-ai/patches/`. Set `AGENTIC_AI_LOCAL_MODE=proposal-only` to queue proposals without editing project files.
 
-Sanitized reusable feedback is queued under `.agentic-ai/outbox/` and posted to `https://lab.agi.flonest.app/feedback/agentic-ai` by default. Set `AGENTIC_AI_LABSERVER_URL` to override the labserver URL, or set `AGENTIC_AI_LABSERVER_URL=off` to keep the queue local for retry.
+Reusable skill proposals are queued under `.agentic-ai/outbox/` and posted to `https://lab.agi.flonest.app/skill-proposals` by default. Set `AGENTIC_AI_LABSERVER_URL` to override the labserver URL, or set `AGENTIC_AI_LABSERVER_URL=off` to keep the queue local for retry.
 
-When the labserver receives GitHub review, issue, PR, or discussion clarification, `agi` polls `https://lab.agi.flonest.app/feedback/agentic-ai/projects/<project-id>/requests`, stores sanitized requests under `.agentic-ai/inbox/`, and answers them through the normal outbox with `response_to`. This keeps the review loop agent-to-agent without exposing raw project context.
+When the labserver receives GitHub review, issue, PR, or discussion clarification, `agi` polls `https://lab.agi.flonest.app/skill-proposals/projects/<project-id>/requests`, stores sanitized requests under `.agentic-ai/inbox/`, and answers them through the normal outbox with `response_to`. This keeps the review loop agent-to-agent without exposing raw project context.
 
 When a local managed draft or locally tuned skill later appears in the signed public skillhub, `agi` verifies the manifest signature, backs up the local draft under `.agentic-ai/local-drafts/`, and reconciles it to the signed upstream version through the managed installer. Set `AGENTIC_AI_AUTO_RECONCILE_SIGNED=false` to disable that automatic replacement.
 
@@ -47,14 +47,14 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 For now, release the CLI through GitHub Releases instead of npm:
 
 ```bash
-npm run manifest:sign -- --git-ref v0.1.0
+npm run manifest:sign -- --git-ref v0.1.7
 npm run check
 npm test
 npm run release:pack
-gh release create v0.1.0 dist/agentic-ai.tgz dist/agentic-ai.tgz.sha256 dist/release.json --title "Agentic AI v0.1.0"
+gh release create v0.1.7 dist/agentic-ai.tgz dist/agentic-ai.tgz.sha256 dist/release.json --title "Agentic AI v0.1.7"
 ```
 
-The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.0`.
+The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.7`.
 
 ## Project-Local Registry
 

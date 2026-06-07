@@ -26,7 +26,7 @@ export async function syncLabserverRequests({
   }
   if (!projectId) throw new Error('project_id is required to poll labserver requests');
 
-  const endpoint = `${labserverUrl.replace(/\/$/, '')}/feedback/agentic-ai/projects/${projectId}/requests`;
+  const endpoint = `${labserverUrl.replace(/\/$/, '')}/skill-proposals/projects/${projectId}/requests`;
   const response = await fetchImpl(endpoint);
   if (!response.ok) throw new Error(`labserver request poll failed: ${response.status} ${await response.text()}`);
   const body = await response.json();

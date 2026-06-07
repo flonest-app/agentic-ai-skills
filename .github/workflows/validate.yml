@@ -14,4 +14,9 @@ jobs:
         with:
           node-version: '24'
       - run: npm test
+      - name: Sign manifest for main validation
+        if: github.event_name == 'push'
+        run: npm run manifest:sign -- --git-ref "$GITHUB_REF_NAME"
+        env:
+          REGISTRY_SIGNING_PRIVATE_KEY: ${{ secrets.REGISTRY_SIGNING_PRIVATE_KEY }}
       - run: npm run check

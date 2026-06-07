@@ -243,18 +243,24 @@ test('queues sanitized outbox and marks delivery results', async () => {
   const queued = await processMaintainerOutput({ projectRoot, output });
   assert.equal(queued.outbox_results.length, 1);
   const queuedPayload = JSON.parse(readFileSync(queued.outbox_results[0].path, 'utf8'));
+  assert.equal(queuedPayload.schema_version, 2);
+  assert.equal(queuedPayload.source, 'consumer-agi');
+  assert.equal(queuedPayload.proposal_type, 'feedback');
   assert.equal(queuedPayload.delivery.status, 'queued');
   assert.match(queuedPayload.delivery.last_error, /LABSERVER_URL/);
-  assert.match(queuedPayload.sanitized_feedback, /\[REDACTED_LOCAL_PATH\]/);
+  assert.match(queuedPayload.private_context, /\[REDACTED_LOCAL_PATH\]/);
 
   const delivered = await submitQueuedOutbox({
     projectRoot,
-    fetchImpl: async () => ({
+    fetchImpl: async (url) => {
+      assert.equal(url, 'https://lab.example/skill-proposals');
+      return {
       ok: true,
       async json() {
-        return { ok: true, route: 'issue' };
+        return { ok: true, route: 'stored' };
       },
-    }),
+    };
+    },
     labserverUrl: 'https://lab.example',
   });
   assert.equal(delivered.results[0].status, 'delivered');
@@ -314,6 +320,8 @@ test('queues labserver revision responses and marks local request answered', asy
 
   const payload = JSON.parse(readFileSync(result.outbox_results[0].path, 'utf8'));
   assert.equal(payload.response_to, '1111222233334444');
+  assert.equal(payload.proposal_type, 'feedback');
+  assert.match(payload.private_context, /Clarification/);
   const request = JSON.parse(readFileSync(join(inboxDir, '1111222233334444.json'), 'utf8'));
   assert.equal(request.local_status, 'answered');
 });

@@ -31,7 +31,7 @@ agi
 
 Do not give the user any separate login command or login flag. First-time login is automatic when `agi` starts. The maintainer runs in that terminal until the terminal closes or the user presses Ctrl+C, and logs are shown in the terminal.
 
-When `agi` runs, it may apply safe `AGENTS.md` and registered managed-skill updates. It must never edit unmanaged skills or product code. Public reusable feedback is sanitized and queued in `.agentic-ai/outbox/`; if `AGENTIC_AI_LABSERVER_URL` is configured, it is submitted to the labserver.
+When `agi` runs, it may apply safe `AGENTS.md` and registered managed-skill updates. It must never edit unmanaged skills or product code. Reusable skill proposals are queued in `.agentic-ai/outbox/`; if `AGENTIC_AI_LABSERVER_URL` is configured, they are submitted to the labserver private mirror pipeline.
 
 ## Boundary
 

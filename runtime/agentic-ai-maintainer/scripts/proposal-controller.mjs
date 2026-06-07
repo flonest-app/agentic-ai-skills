@@ -197,7 +197,7 @@ export function applyProposal({ proposal, context }) {
       return applyManagedSkillProposal({ proposal: normalized, context, base });
     }
     if (normalized.target === 'skillhub' || normalized.target === 'none') {
-      return { ...base, status: 'queued', reason: 'public feedback only' };
+      return { ...base, status: 'queued', reason: 'private skill proposal only' };
     }
     return { ...base, reason: `target is not allowlisted: ${normalized.target}` };
   } catch (error) {
@@ -400,9 +400,9 @@ function applyHunks(text, hunks, path) {
 
 function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot }) {
   const normalized = normalizeProposal(proposal);
-  if (!normalized.response_to && !normalized.upstream_feedback && normalized.target !== 'skillhub' && !normalized.proposed_public_patch) return null;
+  if (!normalized.response_to && !normalized.upstream_feedback && normalized.target !== 'skillhub' && !normalized.proposed_skill_patch) return null;
 
-  const sourceText = normalized.upstream_feedback || normalized.proposed_public_patch || normalized.rationale || parsed.summary;
+  const sourceText = normalized.upstream_feedback || normalized.proposed_skill_patch || normalized.rationale || parsed.summary;
   const sanitized = sanitizeFeedback(sourceText, {
     cwd: projectRoot,
     skillId: normalized.skill_id,
@@ -410,19 +410,19 @@ function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot 
     feedbackKind: 'local-maintainer-output',
   });
   const payload = {
-    schema_version: 1,
+    schema_version: 2,
+    proposal_id: normalized.proposal_id || null,
     project_id: paths.projectId || null,
+    source: 'consumer-agi',
     created_at: new Date().toISOString(),
-    classification: normalized.classification,
-    target: normalized.target,
-    action: normalized.action,
+    proposal_type: proposalTypeFor(normalized),
     skill_id: normalized.skill_id,
-    upstream_repo: normalized.upstream_repo,
+    candidate_skill_name: normalized.candidate_skill_name || normalized.skill_id || null,
     summary: parsed.summary || '',
     rationale: normalized.rationale,
-    sanitized_feedback: sanitized.sanitized_text,
+    proposed_skill_patch: normalized.proposed_skill_patch || null,
+    private_context: sanitized.sanitized_text,
     redactions: sanitized.redactions,
-    proposed_public_patch: normalized.proposed_public_patch || null,
     response_to: normalized.response_to || null,
     local_result: {
       status: localResult.status,
@@ -452,7 +452,7 @@ export async function submitQueuedOutbox({
 } = {}) {
   mkdirSync(outboxDir, { recursive: true });
   const files = readdirSync(outboxDir).filter((file) => file.endsWith('.json')).sort();
-  const endpoint = labserverUrl ? `${labserverUrl.replace(/\/$/, '')}/feedback/agentic-ai` : null;
+  const endpoint = labserverUrl ? `${labserverUrl.replace(/\/$/, '')}/skill-proposals` : null;
   const results = [];
 
   for (const file of files) {
@@ -513,12 +513,22 @@ function normalizeProposal(proposal = {}) {
     action: String(proposal.action || 'none').toLowerCase(),
     rationale: String(proposal.rationale || ''),
     proposed_patch: proposal.proposed_patch || null,
-    proposed_public_patch: proposal.proposed_public_patch || proposal.public_patch || (target === 'skillhub' ? proposal.proposed_patch : null),
+    proposed_skill_patch: proposal.proposed_skill_patch || (target === 'skillhub' ? proposal.proposed_patch : null),
     upstream_feedback: proposal.upstream_feedback || null,
     upstream_repo: proposal.upstream_repo || null,
     response_to: proposal.response_to || proposal.revision_request_id || null,
     skill_id: skillId,
+    candidate_skill_name: proposal.candidate_skill_name || proposal.name || null,
+    proposal_id: proposal.proposal_id || null,
   };
+}
+
+function proposalTypeFor(normalized) {
+  if (normalized.response_to) return 'feedback';
+  if (normalized.action === 'create') return 'skill_create';
+  if (normalized.action === 'update') return 'skill_update';
+  if (normalized.upstream_repo) return 'wrapper';
+  return 'feedback';
 }
 
 function normalizeProjectPath(path) {

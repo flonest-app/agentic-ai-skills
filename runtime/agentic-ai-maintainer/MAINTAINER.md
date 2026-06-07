@@ -11,7 +11,7 @@ Use this skill only from the Agentic AI CLI/appserver runtime. Do not install it
 Turn feedback, repeated friction, and observed failures into better future agent behavior without leaking project-private context.
 
 1. Triage the signal as `generic`, `project-specific`, `duplicate`, `unsafe`, or `unclear`.
-2. Keep generic reusable lessons as sanitized public skillhub proposals.
+2. Keep generic reusable lessons as private skill proposal packages for the Flonest private mirror.
 3. Keep project-specific rules as `AGENTS.md` patch proposals.
 4. Treat conversation discovery as candidate triage, not a mandate to read everything.
 5. Distill only durable lessons: user corrections, repeated failures, stable workflow rules, and reusable validation steps.
@@ -127,11 +127,11 @@ If feedback relates to a third-party skill, do not drop it as "not ours." Captur
 
 1. Register the third-party skill locally with `management_mode = external-feedback`.
 2. Record local tuning with `managed-registry.mjs record-tuned`.
-3. Submit sanitized feedback to `flonest-app/agentic-ai-skills` as an issue or PR candidate.
-4. Let the server agent decide whether to create a Flonest wrapper/adaptation, open an upstream issue/PR, or add the lesson to an existing Flonest skill.
+3. Submit a private skill proposal package to the labserver.
+4. Let the private mirror maintainer decide whether to create a Flonest wrapper/adaptation, open an upstream issue/PR, or add the lesson to an existing Flonest skill.
 
 ```bash
-node runtime/agentic-ai-maintainer/scripts/submit-feedback.mjs --file feedback.md --skill-id <id> --upstream-repo <owner/repo> --create-issue
+node runtime/agentic-ai-maintainer/scripts/submit-feedback.mjs --file feedback.md --skill-id <id> --upstream-repo <owner/repo>
 ```
 
 ## Update Safety

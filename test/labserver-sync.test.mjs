@@ -16,7 +16,7 @@ test('syncs labserver revision requests into the local inbox', async () => {
     projectId: 'abcdef1234567890',
     labserverUrl: 'https://lab.example',
     fetchImpl: async (url) => {
-      assert.equal(url, 'https://lab.example/feedback/agentic-ai/projects/abcdef1234567890/requests');
+      assert.equal(url, 'https://lab.example/skill-proposals/projects/abcdef1234567890/requests');
       return {
         ok: true,
         async json() {
