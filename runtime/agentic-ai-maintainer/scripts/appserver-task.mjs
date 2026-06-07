@@ -5,6 +5,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CODEX_ERROR_KINDS, classifyCodexError } from './codex-errors.mjs';
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
@@ -25,6 +26,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (result.authRequired) {
       console.error('Codex auth is required. Run agi; first-time login starts automatically.');
       process.exit(2);
+    }
+    if (result.codexError) {
+      console.error(result.codexError.message || 'Codex task failed.');
+      process.exit(isBlockingCodexError(result.codexError) ? 2 : 1);
     }
   } catch (err) {
     console.error(err.message);
@@ -53,26 +58,78 @@ export async function runAppServerTask({
   const client = new MiniAppServerClient({ cwd, codexHome, diagnosticLogPath, extraEnv });
   try {
     await client.start();
-    const account = await client.request('account/read', { refreshToken: false }, 30000);
-    if (!account.account) return { authRequired: true, account };
+    let account = await client.request('account/read', { refreshToken: false }, 30000);
+    if (!account.account && account.requiresOpenaiAuth !== false) {
+      account = await client.request('account/read', { refreshToken: true }, 30000)
+        .catch(() => account);
+    }
+    if (!account.account && account.requiresOpenaiAuth !== false) {
+      return {
+        authRequired: true,
+        account,
+        codexError: classifyCodexError({
+          message: 'Codex authentication is required.',
+          account,
+          status: 401,
+        }),
+      };
+    }
+    const rateLimits = await client.request('account/rateLimits/read', {}, 30000).catch((error) => {
+      const codexError = classifyCodexError(error);
+      return isBlockingCodexError(codexError) ? { codexError } : null;
+    });
+    if (rateLimits?.codexError && rateLimits.codexError.kind !== CODEX_ERROR_KINDS.AUTH_REQUIRED) {
+      return blockedTaskResult({ account, codexError: rateLimits.codexError });
+    }
+    const reachedType = rateLimits?.rateLimits?.rateLimitReachedType;
+    if (reachedType) {
+      return blockedTaskResult({
+        account,
+        codexError: classifyCodexError({
+          message: 'Codex usage limit reached.',
+          rateLimits,
+        }),
+      });
+    }
 
     const input = buildTurnInput({ prompt, skillPath, skillName });
 
-    let thread = threadId ? { id: threadId } : await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+    let thread;
+    try {
+      thread = threadId ? { id: threadId } : await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+    } catch (err) {
+      const codexError = classifyCodexError(err);
+      if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
+      throw err;
+    }
     let reusedThread = Boolean(threadId);
     let turn;
     let skillAttached = Boolean(skillPath);
     try {
       turn = (await client.request('turn/start', { threadId: thread.id, input, cwd }, 30000)).turn;
     } catch (err) {
+      const codexError = classifyCodexError(err);
+      if (isBlockingCodexError(codexError)) return blockedTaskResult({ account, codexError });
       if (!threadId) throw err;
-      thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+      try {
+        thread = await startThread(client, { model, cwd, approvalPolicy, sandbox, serviceName });
+      } catch (fallbackErr) {
+        const fallbackCodexError = classifyCodexError(fallbackErr);
+        if (isBlockingCodexError(fallbackCodexError)) return blockedTaskResult({ account, codexError: fallbackCodexError });
+        throw fallbackErr;
+      }
       reusedThread = false;
       const fallbackInput = skillPath
         ? input
         : buildTurnInput({ prompt, skillPath: fallbackSkillPath, skillName });
       skillAttached = Boolean(skillPath || fallbackSkillPath);
-      turn = (await client.request('turn/start', { threadId: thread.id, input: fallbackInput, cwd }, 30000)).turn;
+      try {
+        turn = (await client.request('turn/start', { threadId: thread.id, input: fallbackInput, cwd }, 30000)).turn;
+      } catch (fallbackErr) {
+        const fallbackCodexError = classifyCodexError(fallbackErr);
+        if (isBlockingCodexError(fallbackCodexError)) return blockedTaskResult({ account, codexError: fallbackCodexError });
+        throw fallbackErr;
+      }
     }
     const completed = await client.waitForTurn(turn.id, { stream });
     return {
@@ -83,6 +140,8 @@ export async function runAppServerTask({
       skillAttached,
       turn: completed.turn,
       output: completed.output,
+      codexError: completed.codexError,
+      rateLimits,
     };
   } finally {
     client.stop();
@@ -153,16 +212,33 @@ export class MiniAppServerClient extends EventEmitter {
   waitForTurn(turnId, { stream = false } = {}) {
     return new Promise((resolveWait) => {
       let output = '';
+      let latestError = null;
+      const finish = (turn, codexError = null) => {
+        this.off('notification', onNotification);
+        if (stream) process.stdout.write('\n');
+        resolveWait({ turn, output, codexError });
+      };
       const onNotification = (message) => {
         if (message.method === 'item/agentMessage/delta') {
           const delta = message.params?.delta || '';
           output += delta;
           if (stream) process.stdout.write(delta);
         }
+        if (message.method === 'error') {
+          latestError = message.params?.error || message.params || message;
+          if (message.params?.willRetry) return;
+          const codexError = classifyCodexError(latestError);
+          if (isBlockingCodexError(codexError)) {
+            finish({ id: turnId, status: 'failed', error: latestError }, codexError);
+          }
+          return;
+        }
         if (message.method !== 'turn/completed' || message.params?.turn?.id !== turnId) return;
-        this.off('notification', onNotification);
-        if (stream) process.stdout.write('\n');
-        resolveWait({ turn: message.params.turn, output });
+        const turn = message.params.turn;
+        const codexError = turn.status === 'failed' || turn.error
+          ? classifyCodexError({ turn, error: turn.error || latestError })
+          : null;
+        finish(turn, codexError);
       };
       this.on('notification', onNotification);
     });
@@ -195,8 +271,14 @@ export class MiniAppServerClient extends EventEmitter {
       if (!pending) return;
       clearTimeout(pending.timeout);
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(`${pending.method}: ${message.error.message}`));
-      else pending.resolve(message.result);
+      if (message.error) {
+        const error = new Error(`${pending.method}: ${message.error.message || 'request failed'}`);
+        error.codexError = classifyCodexError(message.error);
+        error.rawCodexError = message.error;
+        pending.reject(error);
+      } else {
+        pending.resolve(message.result);
+      }
       return;
     }
     this.emit('notification', message);
@@ -207,7 +289,22 @@ export function shouldMirrorCodexDiagnosticLine(line) {
   const text = String(line || '').trim();
   if (!text) return false;
   if (/ExperimentalWarning|default prompt too long|icon paths|plugin|skill loader|skill.*warning/i.test(text)) return false;
-  return /\b(error|fatal|panic|failed|auth|unauthorized|forbidden)\b/i.test(text);
+  return /\b(error|fatal|panic|failed|auth|unauthorized|forbidden|quota|usage limit|rate limit|too many requests|credits|spend cap|429|server overloaded)\b/i.test(text);
+}
+
+function blockedTaskResult({ account = null, codexError }) {
+  return {
+    authRequired: codexError.kind === CODEX_ERROR_KINDS.AUTH_REQUIRED,
+    account,
+    codexError,
+  };
+}
+
+function isBlockingCodexError(codexError) {
+  return codexError?.kind === CODEX_ERROR_KINDS.AUTH_REQUIRED
+    || codexError?.kind === CODEX_ERROR_KINDS.QUOTA_EXHAUSTED
+    || codexError?.kind === CODEX_ERROR_KINDS.RATE_LIMITED
+    || codexError?.kind === CODEX_ERROR_KINDS.APP_SERVER_OVERLOADED;
 }
 
 function appendDiagnostic(path, text) {

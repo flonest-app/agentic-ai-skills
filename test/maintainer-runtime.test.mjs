@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_CODEX_SANDBOX } from '../runtime/agentic-ai-maintainer/scripts/appserver-task.mjs';
+import { CODEX_ERROR_KINDS } from '../runtime/agentic-ai-maintainer/scripts/codex-errors.mjs';
 import { registerManagedSkill } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
 import {
   DEFAULT_LABSERVER_URL,
@@ -166,6 +167,82 @@ test('runMaintenanceOnce uses script-owned proposal file instead of final provid
     assert.equal(status.status, 'COMPLETED');
     assert.equal(status.maintainer_proposal_file, join(projectRoot, '.agentic-ai/proposals/active.json'));
     assert.deepEqual(calls.map((call) => call.kind), ['appserver', 'controller']);
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
+    else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
+test('runMaintenanceOnce records expired Codex auth without running controller', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-auth-'));
+  const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
+  const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  process.env.AGENTIC_AI_HOME = agenticHome;
+  process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+  mkdirSync(join(agenticHome, 'codex-home'), { recursive: true });
+  writeFileSync(join(agenticHome, 'codex-home/auth.json'), '{}\n');
+
+  try {
+    const status = await runMaintenanceOnce({
+      projectRoot,
+      runAppServerTaskImpl: async () => ({
+        authRequired: true,
+        codexError: {
+          kind: CODEX_ERROR_KINDS.AUTH_REQUIRED,
+          message: 'chatgpt authentication required',
+        },
+      }),
+      processMaintainerOutputImpl: async () => {
+        throw new Error('controller should not run when auth is expired');
+      },
+    });
+
+    assert.equal(status.status, 'AUTH_REQUIRED');
+    assert.equal(status.codex_error.kind, CODEX_ERROR_KINDS.AUTH_REQUIRED);
+    assert.equal(status.codex_home, join(agenticHome, 'codex-home'));
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
+    else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
+test('runMaintenanceOnce waits on Codex quota without running controller', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-quota-'));
+  const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
+  const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  process.env.AGENTIC_AI_HOME = agenticHome;
+  process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+  mkdirSync(join(agenticHome, 'codex-home'), { recursive: true });
+  writeFileSync(join(agenticHome, 'codex-home/auth.json'), '{}\n');
+
+  try {
+    const status = await runMaintenanceOnce({
+      projectRoot,
+      runAppServerTaskImpl: async () => ({
+        authRequired: false,
+        codexError: {
+          kind: CODEX_ERROR_KINDS.QUOTA_EXHAUSTED,
+          message: 'The usage limit has been reached',
+          rate_limit_reached_type: 'workspace_member_usage_limit_reached',
+        },
+      }),
+      processMaintainerOutputImpl: async () => {
+        throw new Error('controller should not run while Codex quota is exhausted');
+      },
+    });
+
+    assert.equal(status.status, 'WAITING_FOR_CODEX_QUOTA');
+    assert.match(status.message, /keep watching/);
+    assert.equal(status.codex_error.kind, CODEX_ERROR_KINDS.QUOTA_EXHAUSTED);
+    assert.equal(status.evidence_cursor_path, join(projectRoot, '.agentic-ai/evidence-cursors.json'));
+    assert.equal(existsSync(join(projectRoot, '.agentic-ai/patches')), true);
+    assert.equal(existsSync(join(projectRoot, '.agentic-ai/patches', 'should-not-exist.json')), false);
   } finally {
     if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
     else process.env.AGENTIC_AI_HOME = previousHome;

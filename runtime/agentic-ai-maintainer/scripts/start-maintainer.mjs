@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { childEnvForLogFormat, getLogFormat, stripLogArgs } from './user-log.mjs';
 import {
   getMaintainerPaths,
   initializeMaintainerState,
@@ -16,14 +17,17 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const args = parseArgs(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  const logFormat = getLogFormat({ argv: rawArgv });
+  const args = parseArgs(stripLogArgs(rawArgv));
   const projectRoot = resolve(args.projectRoot || process.cwd());
+  const childEnv = childEnvForLogFormat(process.env, logFormat);
 
   if (args.foreground) {
     const result = spawnSync(process.execPath, buildDaemonArgs({ scriptDir, projectRoot, args }), {
       cwd: projectRoot,
       stdio: 'inherit',
-      env: process.env,
+      env: childEnv,
     });
     process.exit(result.status ?? 1);
   }
@@ -49,6 +53,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
     const child = spawn(process.execPath, buildDaemonArgs({ scriptDir, projectRoot, args }), {
       cwd: projectRoot,
+      env: childEnv,
       detached: true,
       stdio: 'ignore',
     });
@@ -110,6 +115,7 @@ function parseArgs(argv) {
     else if (arg === '--once') parsed.once = true;
     else if (arg === '--daemon') parsed.daemon = true;
     else if (arg === '--foreground') parsed.foreground = true;
+    else if (arg === '--json') {}
     else if (arg === '--help') {
       console.log('Usage: start-maintainer.mjs [--project-root repo] [--once|--daemon|--foreground] [--watch] [--idle-ms 10000] [--message text] [--conversation-file path] [--history-root path] [--source-codex-home path]');
       process.exit(0);

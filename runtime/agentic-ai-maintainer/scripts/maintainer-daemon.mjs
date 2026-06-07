@@ -1,16 +1,22 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { readdirSync, statSync, unlinkSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   getMaintainerPaths,
   runMaintenanceOnce,
   shouldStop,
   writeMaintainerStatus,
 } from './maintainer-runtime.mjs';
+import { createUserLogger, getLogFormat, stripLogArgs } from './user-log.mjs';
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const args = parseArgs(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  const logger = createUserLogger({ format: getLogFormat({ argv: rawArgv }) });
+  const args = parseArgs(stripLogArgs(rawArgv));
   const projectRoot = resolve(args.projectRoot || process.cwd());
   const intervalMs = Math.max(1, args.intervalMinutes || 60) * 60 * 1000;
   const idleMs = Math.max(1000, args.idleMs || 10000);
@@ -23,7 +29,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       pid: null,
       message: `Maintainer stopped by ${signal}.`,
     });
-    logEvent('maintainer.stopped', { project_root: projectRoot, signal });
+    logEvent(logger, 'maintainer.stopped', { project_root: projectRoot, signal });
     process.exit(signalExitCode(signal));
   };
 
@@ -41,7 +47,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     pid: process.pid,
     message: 'Maintainer daemon running.',
   });
-  logEvent('maintainer.started', {
+  logEvent(logger, 'maintainer.started', {
     project_root: projectRoot,
     mode: args.watch ? 'watch' : 'interval',
     interval_minutes: args.intervalMinutes || 60,
@@ -49,10 +55,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   });
 
   if (args.watch) {
-    await runWatchLoop({ projectRoot, args, idleMs, pollMs });
+    await runWatchLoop({ projectRoot, args, idleMs, pollMs, logger });
   } else {
     while (!shouldStop({ projectRoot })) {
-      await runMaintainerTurn({ projectRoot, args });
+      await runMaintainerTurn({ projectRoot, args, logger });
       await sleep(intervalMs);
     }
   }
@@ -63,17 +69,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     pid: null,
     message: 'Maintainer daemon stopped.',
   });
-  logEvent('maintainer.stopped', { project_root: projectRoot });
+  logEvent(logger, 'maintainer.stopped', { project_root: projectRoot });
 }
 
-async function runMaintainerTurn({ projectRoot, args, changedFiles = [] }) {
+async function runMaintainerTurn({ projectRoot, args, changedFiles = [], logger }) {
   const message = args.message || (
     changedFiles.length > 0
       ? `Repository changed and stayed idle. Review the attached conversation evidence, AGENTS.md, and managed skills. Changed files: ${changedFiles.slice(0, 20).join(', ')}`
       : null
   );
-    logEvent('maintainer.turn.start', { project_root: projectRoot, message, conversation_file: args.conversationFile || null });
-    const status = await runMaintenanceOnce({
+  logEvent(logger, 'maintainer.turn.start', { project_root: projectRoot, conversation_file: args.conversationFile || null });
+  let status = await runMaintenanceOnce({
       projectRoot,
       codexHome: args.codexHome,
       sourceCodexHome: args.sourceCodexHome,
@@ -82,7 +88,41 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [] }) {
       triggerMessage: message,
       model: args.model,
     });
-    logEvent('maintainer.turn.done', {
+
+  if (status.status === 'AUTH_REQUIRED' && !args.reauthAttempted) {
+    logEvent(logger, 'auth.reauth.start', { project_root: projectRoot, codex_home: status.codex_home || null });
+    const paths = getMaintainerPaths({ projectRoot, codexHome: args.codexHome, sourceCodexHome: args.sourceCodexHome });
+    const login = spawnSync(process.execPath, [
+      resolve(scriptDir, 'codex-login.mjs'),
+      '--codex-home',
+      paths.codexHome,
+    ], {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    const ok = login.status === 0;
+    logEvent(logger, 'auth.reauth.done', { project_root: projectRoot, ok });
+    if (ok) {
+      status = await runMaintenanceOnce({
+        projectRoot,
+        codexHome: args.codexHome,
+        sourceCodexHome: args.sourceCodexHome,
+        historyRoots: args.historyRoots,
+        conversationFile: args.conversationFile,
+        triggerMessage: message,
+        model: args.model,
+      });
+    }
+  }
+
+  if (status.status === 'WAITING_FOR_CODEX_QUOTA') {
+    logEvent(logger, 'codex.quota.wait', { project_root: projectRoot, codex_error: status.codex_error || null });
+  } else if (status.codex_error?.kind === 'app_server_overloaded') {
+    logEvent(logger, 'codex.overloaded', { project_root: projectRoot, codex_error: status.codex_error });
+  }
+
+  logEvent(logger, 'maintainer.turn.done', {
       project_root: projectRoot,
       status: status.status,
       message: status.message,
@@ -95,8 +135,8 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [] }) {
     });
 }
 
-async function runWatchLoop({ projectRoot, args, idleMs, pollMs }) {
-  logEvent('watch.started', { project_root: projectRoot, idle_ms: idleMs, poll_ms: pollMs });
+async function runWatchLoop({ projectRoot, args, idleMs, pollMs, logger }) {
+  logEvent(logger, 'watch.started', { project_root: projectRoot, idle_ms: idleMs, poll_ms: pollMs });
   let previous = collectProjectFileState(projectRoot);
   let pending = null;
 
@@ -108,14 +148,14 @@ async function runWatchLoop({ projectRoot, args, idleMs, pollMs }) {
       const files = new Set([...(pending?.files || []), ...changedFiles]);
       pending = { changedAt: Date.now(), files: Array.from(files).slice(0, 50) };
       previous = next;
-      logEvent('watch.change', { project_root: projectRoot, changed_files: pending.files });
+      logEvent(logger, 'watch.change', { project_root: projectRoot, changed_files: pending.files });
     }
 
     if (pending && Date.now() - pending.changedAt >= idleMs) {
       const files = pending.files;
       pending = null;
-      logEvent('watch.idle_trigger', { project_root: projectRoot, changed_files: files });
-      await runMaintainerTurn({ projectRoot, args, changedFiles: files });
+      logEvent(logger, 'watch.idle_trigger', { project_root: projectRoot, changed_files: files });
+      await runMaintainerTurn({ projectRoot, args, changedFiles: files, logger });
       previous = collectProjectFileState(projectRoot);
     }
   }
@@ -137,6 +177,7 @@ function parseArgs(argv) {
     else if (arg === '--watch') parsed.watch = true;
     else if (arg === '--idle-ms') parsed.idleMs = Number(argv[++i]);
     else if (arg === '--poll-ms') parsed.pollMs = Number(argv[++i]);
+    else if (arg === '--json') {}
     else if (arg === '--help') {
       console.log('Usage: maintainer-daemon.mjs [--project-root repo] [--interval-minutes 60] [--watch] [--idle-ms 10000] [--message text] [--conversation-file path] [--history-root path] [--source-codex-home path]');
       process.exit(0);
@@ -151,8 +192,8 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-function logEvent(event, payload = {}) {
-  console.log(JSON.stringify({ event, updated_at: new Date().toISOString(), ...payload }));
+function logEvent(logger, event, payload = {}) {
+  logger.event(event, payload);
 }
 
 function signalExitCode(signal) {

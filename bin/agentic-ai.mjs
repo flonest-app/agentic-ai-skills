@@ -4,11 +4,15 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { childEnvForLogFormat, createUserLogger, getLogFormat, stripLogArgs } from '../runtime/agentic-ai-maintainer/scripts/user-log.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const scriptRoot = resolve(repoRoot, 'runtime/agentic-ai-maintainer/scripts');
 
-const argv = process.argv.slice(2);
+const rawArgv = process.argv.slice(2);
+const logFormat = getLogFormat({ argv: rawArgv });
+const logger = createUserLogger({ format: logFormat });
+const argv = stripLogArgs(rawArgv);
 const [command, ...rest] = argv;
 
 const scripts = {
@@ -65,7 +69,6 @@ process.exit(result.status ?? signalExitCode(result.signal) ?? 1);
 async function runDefaultAgi(rawArgs) {
   const args = normalizeProjectArg(rawArgs);
   await ensureRuntimeReady(args);
-  console.log('Starting Agentic AI maintainer. Press Ctrl+C to stop.');
   const result = spawnSync(process.execPath, [
     resolve(scriptRoot, 'start-maintainer.mjs'),
     '--foreground',
@@ -86,8 +89,7 @@ async function ensureRuntimeReady(args) {
 
   if (hasCodexAuth(runtimeCodexHome)) return { codex_home: runtimeCodexHome };
 
-  console.log('First run: Agentic AI needs Codex auth for its isolated runtime home.');
-  console.log(`Auth will be stored under ${runtimeCodexHome}`);
+  logger.event('auth.first_run', { codex_home: runtimeCodexHome });
   const result = spawnSync(process.execPath, [
     resolve(scriptRoot, 'codex-login.mjs'),
     '--codex-home',
@@ -105,6 +107,7 @@ async function ensureRuntimeReady(args) {
     console.error(`Codex auth was not written under ${runtimeCodexHome}.`);
     process.exit(1);
   }
+  logger.event('auth.success', { codex_home: runtimeCodexHome });
   return { codex_home: runtimeCodexHome };
 }
 
@@ -140,7 +143,7 @@ function hasCodexAuth(codexHome) {
 
 function childEnv(extra = {}) {
   return {
-    ...process.env,
+    ...childEnvForLogFormat(process.env, logFormat),
     NODE_OPTIONS: nodeOptionsWithoutExperimentalWarningNoise(process.env.NODE_OPTIONS),
     ...extra,
   };
@@ -162,6 +165,7 @@ Starts the Agentic AI maintainer for the current project. First run opens the
 Codex login flow automatically; later runs reuse ~/.agentic-ai/codex-home.
 
 Advanced:
+  agi --json
   agi status
   agi stop
   agi once

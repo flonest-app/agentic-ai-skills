@@ -89,7 +89,7 @@ export function collectMaintainerContext({
       'For human Codex JSONL, use read-conversation-slice.mjs; it starts at the stored cursor and prevents rereading full chats.',
       'Do not read isolated maintainer Codex sessions as project evidence.',
       'Use managed_skill_verification before proposing managed-skill updates or removals.',
-      'Return JSON proposals only; the controller applies validated writes.',
+      'Write proposals only with write-maintainer-proposal.mjs; the controller reads the proposal file and ignores final assistant prose.',
     ],
   };
 }

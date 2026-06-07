@@ -52,6 +52,7 @@ test('collects focused maintainer context before ad hoc exploration', () => {
   assert.equal(context.conversation_discovery.candidates[0].cursor.previous_line, 0);
   assert.equal(context.conversation_discovery.candidates[0].cursor.next_unread_line, 1);
   assert.match(context.conversation_discovery.candidates[0].cursor.read_command, /read-conversation-slice\.mjs/);
-  assert.match(context.next_steps.join('\n'), /controller applies validated writes/);
+  assert.match(context.next_steps.join('\n'), /write-maintainer-proposal\.mjs/);
+  assert.match(context.next_steps.join('\n'), /controller reads the proposal file/);
   assert.match(context.next_steps.join('\n'), /starts at the stored cursor/);
 });

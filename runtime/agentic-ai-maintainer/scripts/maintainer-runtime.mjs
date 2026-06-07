@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { initRegistry, listManagedSkills } from './managed-registry.mjs';
 import { DEFAULT_CODEX_SANDBOX, runAppServerTask } from './appserver-task.mjs';
+import { CODEX_ERROR_KINDS, classifyCodexError } from './codex-errors.mjs';
 import { processMaintainerOutput } from './proposal-controller.mjs';
 import { listPendingLabserverRequests, syncLabserverRequests } from './labserver-sync.mjs';
 import { reconcileSignedManagedSkills } from './reconcile-signed-skills.mjs';
@@ -23,6 +24,7 @@ export const STATUS = {
   RUNNING: 'RUNNING',
   COMPLETED: 'COMPLETED',
   STOPPED: 'STOPPED',
+  WAITING_FOR_CODEX_QUOTA: 'WAITING_FOR_CODEX_QUOTA',
   ERROR: 'ERROR',
 };
 
@@ -291,9 +293,27 @@ export async function runMaintenanceOnce({
         stateDir,
         status: STATUS.AUTH_REQUIRED,
         pid: null,
-        message: 'Codex auth required. Run `agi`; first-time login starts automatically.',
+        message: 'Codex sign-in is required for Agentic AI.',
+        extra: {
+          codex_home: paths.codexHome,
+          codex_error: result.codexError || classifyCodexError({ message: 'Codex authentication is required.' }),
+          thread_ref_path: paths.threadRefPath,
+          codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
+          codex_sessions_dir: join(paths.codexHome, 'sessions'),
+          source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
+          source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
+          evidence_cursor_path: join(paths.stateRoot, 'evidence-cursors.json'),
+        },
       });
     }
+
+    const blockedStatus = statusForCodexError({
+      codexError: result.codexError,
+      paths,
+      projectRoot: paths.projectRoot,
+      stateDir,
+    });
+    if (blockedStatus) return blockedStatus;
 
     const nextThreadRef = writeProjectThreadRef(paths, {
       ...threadRef,
@@ -365,6 +385,15 @@ export async function runMaintenanceOnce({
       },
     });
   } catch (err) {
+    const codexError = classifyCodexError(err);
+    const blockedStatus = statusForCodexError({
+      codexError,
+      paths,
+      projectRoot: paths.projectRoot,
+      stateDir,
+      fallbackMessage: err.message,
+    });
+    if (blockedStatus) return blockedStatus;
     return writeMaintainerStatus({
       projectRoot: paths.projectRoot,
       stateDir,
@@ -373,6 +402,64 @@ export async function runMaintenanceOnce({
       message: err.message,
     });
   }
+}
+
+function statusForCodexError({
+  codexError,
+  paths,
+  projectRoot,
+  stateDir,
+  fallbackMessage,
+}) {
+  if (!codexError || codexError.kind === CODEX_ERROR_KINDS.UNKNOWN) return null;
+
+  if (codexError.kind === CODEX_ERROR_KINDS.AUTH_REQUIRED) {
+    return writeMaintainerStatus({
+      projectRoot,
+      stateDir,
+      status: STATUS.AUTH_REQUIRED,
+      pid: null,
+      message: 'Codex sign-in is required for Agentic AI.',
+      extra: codexErrorStatusExtra({ codexError, paths }),
+    });
+  }
+
+  if (codexError.kind === CODEX_ERROR_KINDS.QUOTA_EXHAUSTED || codexError.kind === CODEX_ERROR_KINDS.RATE_LIMITED) {
+    return writeMaintainerStatus({
+      projectRoot,
+      stateDir,
+      status: STATUS.WAITING_FOR_CODEX_QUOTA,
+      pid: null,
+      message: 'Codex usage limit reached. Agentic AI will keep watching and retry later. No project files were changed.',
+      extra: codexErrorStatusExtra({ codexError, paths }),
+    });
+  }
+
+  if (codexError.kind === CODEX_ERROR_KINDS.APP_SERVER_OVERLOADED) {
+    return writeMaintainerStatus({
+      projectRoot,
+      stateDir,
+      status: STATUS.ERROR,
+      pid: null,
+      message: codexError.message || fallbackMessage || 'Codex app-server is overloaded; retry later.',
+      extra: codexErrorStatusExtra({ codexError, paths }),
+    });
+  }
+
+  return null;
+}
+
+function codexErrorStatusExtra({ codexError, paths }) {
+  return {
+    codex_error: codexError,
+    codex_home: paths.codexHome,
+    thread_ref_path: paths.threadRefPath,
+    codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
+    codex_sessions_dir: join(paths.codexHome, 'sessions'),
+    source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
+    source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
+    evidence_cursor_path: join(paths.stateRoot, 'evidence-cursors.json'),
+  };
 }
 
 export function readProjectThreadRef(paths) {
