@@ -2,15 +2,15 @@
 
 Public Agentic AI distribution for bootstrap skills, the CLI runtime, and the Flonest-managed public skillhub.
 
-One-line install prompt for a coding agent:
+One-line install/update prompt for a coding agent:
 
 ```text
-Install Agentic AI: run `npx skills add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me I can start it with just `agi`.
+Install or update Agentic AI: run `npx skills add flonest-app/agentic-ai-skills --skill agentic-ai-lite --full-depth`, then run `node .agents/skills/agentic-ai-lite/scripts/install-maintainer.mjs`, and after success tell me to open a new terminal and run `agi`.
 ```
 
 `agentic-ai-lite` is managed under `skill-hub/`, so `--full-depth` is required for the `skills` CLI to discover it.
 
-The bundled installer downloads the Agentic AI CLI tarball from the latest GitHub Release, places it under `~/.agentic-ai`, updates PATH for new terminals, and leaves the full maintainer runtime out of the project tree. No npm registry publish is required. After installation, the user-facing command is:
+The bundled installer downloads the Agentic AI CLI tarball from the latest GitHub Release, places it under `~/.agentic-ai`, updates PATH for new terminals, and leaves the full maintainer runtime out of the project tree. No npm registry publish is required. After installation or update, open a new terminal and run:
 
 ```bash
 agi
