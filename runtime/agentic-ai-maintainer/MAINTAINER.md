@@ -17,12 +17,50 @@ Turn feedback, repeated friction, and observed failures into better future agent
 5. Distill only durable lessons: user corrections, repeated failures, stable workflow rules, and reusable validation steps.
 6. Bring in, create, update, or propose removal of project skills only through the managed-skill registry.
 
+## Mandatory Turn Workflow
+
+Run the deterministic context bootstrap before broad repo exploration or raw transcript reads:
+
+```bash
+node runtime/agentic-ai-maintainer/scripts/collect-maintainer-context.mjs --project-root "$PWD" --source-codex-home ~/.codex --cursor-path .agentic-ai/evidence-cursors.json --limit 20
+```
+
+In the installed hidden skill, resolve this helper from the skill's `scripts/` directory. The bootstrap output is the map for the turn:
+
+- AGENTS files and repo guidance files
+- project `.agents/skills/*` with managed vs unmanaged ownership
+- managed-skill registry verification
+- git status and root `AGENTS.md` ignore state
+- project-relevant source Codex conversation candidates from `~/.codex`
+
+Only after this bootstrap should the maintainer read selected files or conversation ranges. Avoid open-ended `find`, broad `rg`, and app-server logs unless the bootstrap output gives a specific reason.
+
+Do not read full human Codex JSONL files on every turn. The maintainer app-server thread already has prior turn context. Read only unread chat lines with the evidence cursor:
+
+```bash
+node runtime/agentic-ai-maintainer/scripts/read-conversation-slice.mjs --project-root "$PWD" --cursor-path .agentic-ai/evidence-cursors.json --file <candidate-jsonl> --max-lines 120 --mark-read
+```
+
+The cursor file lives in project `.agentic-ai/evidence-cursors.json`. It records the last JSONL line inspected per source conversation file, so follow-up turns do not replay old human/coding-agent chats.
+
+The controller prompt is intentionally only a one-line goal trigger, such as `Use agentic-ai-maintainer skill: start maintaining this project` or `Use agentic-ai-maintainer skill: continue maintaining this project`. The cwd tells Codex which project is active; the skill body and CLI scripts own discovery, Codex-history handling, schema, and safety. Final assistant text is not trusted for maintenance actions. Write every proposal through `write-maintainer-proposal.mjs` to `$AGENTIC_AI_PROPOSAL_FILE`; `proposal-controller.mjs` then validates that file, rejects unsafe targets, and applies only allowlisted changes.
+
+Before finishing each turn, validate the script-owned proposal file:
+
+```bash
+node runtime/agentic-ai-maintainer/scripts/write-maintainer-proposal.mjs validate --project-root "$PWD"
+```
+
+If no durable change is needed, leave the initialized proposal file empty and still validate it.
+
 ## Conversation Evidence
 
 The actual coding agent's Codex session history is one of the main sources of project learning. Do not confuse ownership with relevance:
 
 - The user's/source coding agent Codex home owns project session storage under `session_index.jsonl` and `sessions/`.
+- That source Codex home is mandatory evidence for project learning because it contains the real human/coding-agent conversations.
 - The Agentic AI sidecar's isolated `~/.agentic-ai/codex-home` is operational state for auth and maintainer thread continuity; do not use its chats as project-learning evidence.
+- The project `.agentic-ai/logs/` directory and Codex app-server stderr are operational diagnostics, not project-learning evidence. Use them only to diagnose Agentic AI runtime failures.
 - Agentic AI owns only the project thread pointer under `thread-ref.json`.
 - The maintainer must still use Codex sessions as read-only evidence when they mention the project root, project name, files, `AGENTS.md`, or managed skills.
 - Discovery is mandatory triage, not exhaustive reading.
@@ -40,6 +78,7 @@ Default evidence sources include project `.conversations/`, the user's source Co
 The runtime maintains a project-local ownership registry:
 
 - Warn the user that project `AGENTS.md` will become agentic-ai-managed before creating or rewriting it.
+- If durable project rules belong in root `AGENTS.md`, still propose the `AGENTS.md` patch when that file is absent or ignored by git. The controller applies safe local patches and reports git-ignore warnings; do not edit `.gitignore`.
 - Never touch user-installed skills unless they are registered in the local agentic-ai managed-skill inventory.
 - Register every skill that agentic-ai installs, creates, or tunes.
 - Use the registry to verify managed skill integrity and detect local tuning drift.
@@ -154,6 +193,7 @@ Never overwrite `AGENTS.md`. Propose a patch and let the user or supervising tas
 
 - Do not include project-specific commands, repo paths, private architecture, or one-off chat detail in public skillhub updates.
 - Do not include raw transcripts or screenshots.
+- Do not emit skillhub feedback for unrelated user/global Codex plugins or skills discovered only through app-server diagnostics. Emit skillhub proposals only for Agentic AI runtime behavior, Flonest skillhub skills, registered agentic-ai-managed project skills, or registered third-party skills.
 - Do not encode a specific agent product's history path.
 - Do not make transcript discovery exhaustive. Mandatory distillation means mandatory triage and selective inspection.
 - Do not modify skills that are absent from the local managed-skill registry.

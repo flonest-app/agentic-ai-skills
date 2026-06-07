@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 import {
+  spawnSync,
+} from 'node:child_process';
+import {
+  randomBytes,
+} from 'node:crypto';
+import {
   existsSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +24,7 @@ import {
 import { installManagedSkill } from './install-managed-skill.mjs';
 import { markLabserverRequestAnswered } from './labserver-sync.mjs';
 import { sanitizeFeedback } from './submit-feedback.mjs';
+import { loadMaintainerProposalFile } from './write-maintainer-proposal.mjs';
 
 const DENIED_PATH_PARTS = new Set(['.git', 'node_modules']);
 const SECRET_PATTERNS = [
@@ -33,10 +40,11 @@ const RAW_TRANSCRIPT_PATTERNS = [
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
-  const output = args.file ? readFileSync(args.file, 'utf8') : readFileSync(0, 'utf8');
+  const output = args.proposalFile ? '' : args.file ? readFileSync(args.file, 'utf8') : readFileSync(0, 'utf8');
   const result = await processMaintainerOutput({
     projectRoot: resolve(args.projectRoot || process.cwd()),
     output,
+    proposalFile: args.proposalFile,
     localMode: args.localMode,
     labserverUrl: args.labserverUrl,
   });
@@ -47,6 +55,7 @@ export async function processMaintainerOutput({
   projectRoot = process.cwd(),
   paths,
   output,
+  proposalFile,
   localMode = process.env.AGENTIC_AI_LOCAL_MODE || 'apply-safe',
   labserverUrl = process.env.AGENTIC_AI_LABSERVER_URL,
   fetchImpl = globalThis.fetch,
@@ -62,7 +71,9 @@ export async function processMaintainerOutput({
   mkdirSync(runtimePaths.patchesDir, { recursive: true });
   mkdirSync(runtimePaths.outboxDir, { recursive: true });
 
-  const parsed = parseMaintainerJson(output);
+  const parsed = proposalFile
+    ? parseMaintainerProposalFile({ projectRoot: root, proposalFile })
+    : parseMaintainerJson(output);
   const managedSkills = listManagedSkills({ projectRoot: root });
   const context = {
     projectRoot: root,
@@ -135,6 +146,37 @@ export function parseMaintainerJson(output) {
       },
     ],
   };
+}
+
+export function parseMaintainerProposalFile({ projectRoot = process.cwd(), proposalFile } = {}) {
+  try {
+    const loaded = loadMaintainerProposalFile({ projectRoot, file: proposalFile });
+    return {
+      summary: typeof loaded.document.summary === 'string' ? loaded.document.summary : '',
+      proposals: Array.isArray(loaded.document.proposals) ? loaded.document.proposals : [],
+      source: 'proposal-file',
+      proposal_file: loaded.path,
+      valid: true,
+    };
+  } catch (error) {
+    return {
+      summary: 'Maintainer proposal file was missing or invalid.',
+      proposals: [
+        {
+          classification: 'unclear',
+          target: 'none',
+          action: 'none',
+          rationale: `The maintainer proposal file could not be used: ${error.message}`,
+          proposed_patch: null,
+          upstream_feedback: null,
+        },
+      ],
+      source: 'proposal-file',
+      proposal_file: proposalFile || null,
+      valid: false,
+      reason: error.message,
+    };
+  }
 }
 
 function extractBalancedJsonObjects(text) {
@@ -215,7 +257,7 @@ function applyAgentsProposal({ proposal, context, base }) {
     diff: proposal.proposed_patch,
     allowPath: (path) => path === 'AGENTS.md',
   });
-  return { ...base, status: 'applied', applied_paths: result.paths };
+  return { ...base, status: 'applied', applied_paths: result.paths, warnings: gitVisibilityWarnings(context.projectRoot, result.paths) };
 }
 
 function applyManagedSkillProposal({ proposal, context, base }) {
@@ -253,6 +295,7 @@ function applyManagedSkillProposal({ proposal, context, base }) {
       ...base,
       status: 'applied',
       applied_paths: [result.registered?.relative_path || result.installed_path || installedPath],
+      warnings: gitVisibilityWarnings(context.projectRoot, [result.registered?.relative_path || result.installed_path || installedPath]),
     };
   }
 
@@ -280,7 +323,7 @@ function applyManagedSkillProposal({ proposal, context, base }) {
       managementMode: 'flonest-owned',
     });
     context.managedById.set(skillId, registered);
-    return { ...base, status: 'applied', applied_paths: result.paths };
+    return { ...base, status: 'applied', applied_paths: result.paths, warnings: gitVisibilityWarnings(context.projectRoot, result.paths) };
   }
 
   if (!existing || existing.status === 'removed') {
@@ -297,7 +340,7 @@ function applyManagedSkillProposal({ proposal, context, base }) {
     });
     const tuned = recordTunedSkill({ projectRoot: context.projectRoot, skillId });
     context.managedById.set(skillId, { ...existing, status: tuned.status, sha256: tuned.sha256 });
-    return { ...base, status: 'applied', applied_paths: result.paths };
+    return { ...base, status: 'applied', applied_paths: result.paths, warnings: gitVisibilityWarnings(context.projectRoot, result.paths) };
   }
 
   if (proposal.action === 'remove') {
@@ -402,6 +445,8 @@ function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot 
   const normalized = normalizeProposal(proposal);
   if (!normalized.response_to && !normalized.upstream_feedback && normalized.target !== 'skillhub' && !normalized.proposed_skill_patch) return null;
 
+  const proposalId = normalizeProposalId(normalized.proposal_id);
+  const createdAt = new Date().toISOString();
   const sourceText = normalized.upstream_feedback || normalized.proposed_skill_patch || normalized.rationale || parsed.summary;
   const sanitized = sanitizeFeedback(sourceText, {
     cwd: projectRoot,
@@ -411,10 +456,10 @@ function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot 
   });
   const payload = {
     schema_version: 2,
-    proposal_id: normalized.proposal_id || null,
+    proposal_id: proposalId,
     project_id: paths.projectId || null,
     source: 'consumer-agi',
-    created_at: new Date().toISOString(),
+    created_at: createdAt,
     proposal_type: proposalTypeFor(normalized),
     skill_id: normalized.skill_id,
     candidate_skill_name: normalized.candidate_skill_name || normalized.skill_id || null,
@@ -433,7 +478,10 @@ function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot 
       attempts: 0,
     },
   };
-  const outboxPath = join(paths.outboxDir, `${Date.now()}-${safeName(normalized.target)}.json`);
+  const outboxPath = uniqueOutboxPath(
+    paths.outboxDir,
+    `${createdAt.replaceAll(':', '-')}-${proposalId}-${safeName(normalized.target)}.json`,
+  );
   writeJson(outboxPath, payload);
   if (normalized.response_to) {
     markLabserverRequestAnswered({
@@ -442,6 +490,37 @@ function writeOutboxPayload({ proposal, localResult, parsed, paths, projectRoot 
     });
   }
   return { path: outboxPath, status: 'queued' };
+}
+
+function normalizeProposalId(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (/^[a-f0-9]{8,64}$/.test(text)) return text;
+  return randomBytes(16).toString('hex');
+}
+
+function uniqueOutboxPath(outboxDir, fileName) {
+  const dot = fileName.lastIndexOf('.');
+  const base = dot === -1 ? fileName : fileName.slice(0, dot);
+  const extension = dot === -1 ? '' : fileName.slice(dot);
+  let candidate = join(outboxDir, fileName);
+  for (let index = 1; existsSync(candidate); index += 1) {
+    candidate = join(outboxDir, `${base}-${index}${extension}`);
+  }
+  return candidate;
+}
+
+function gitVisibilityWarnings(projectRoot, paths) {
+  const warnings = [];
+  for (const path of paths) {
+    const result = spawnSync('git', ['check-ignore', '-q', '--', path], {
+      cwd: projectRoot,
+      stdio: 'ignore',
+    });
+    if (result.status === 0) {
+      warnings.push(`${path} is ignored by git; the local file is usable, but it will not be committed unless the ignore rule changes.`);
+    }
+  }
+  return warnings;
 }
 
 export async function submitQueuedOutbox({
@@ -574,9 +653,10 @@ function parseArgs(argv) {
     if (arg === '--project-root') parsed.projectRoot = argv[++i];
     else if (arg === '--file') parsed.file = argv[++i];
     else if (arg === '--local-mode') parsed.localMode = argv[++i];
+    else if (arg === '--proposal-file') parsed.proposalFile = argv[++i];
     else if (arg === '--labserver-url') parsed.labserverUrl = argv[++i];
     else if (arg === '--help') {
-      console.log('Usage: proposal-controller.mjs [--project-root repo] [--file maintainer-output.json]');
+      console.log('Usage: proposal-controller.mjs [--project-root repo] [--proposal-file .agentic-ai/proposals/active.json]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

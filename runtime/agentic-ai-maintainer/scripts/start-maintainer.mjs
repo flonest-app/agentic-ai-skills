@@ -77,6 +77,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(initialized.status.status === 'AUTH_REQUIRED' ? 2 : 0);
   }
 
+  console.error('Running Agentic AI maintainer turn. This can take a minute; diagnostics are saved under .agentic-ai/logs/.');
   const status = await runMaintenanceOnce({
     projectRoot,
     codexHome: args.codexHome,

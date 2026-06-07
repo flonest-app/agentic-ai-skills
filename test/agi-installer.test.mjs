@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,11 @@ import {
   buildGitHubReleasePackageSpec,
   buildNpmInstallArgs,
   installMaintainer,
+  parseGitHubReleasePackageSpec,
+  prepareNpmPackageSpec,
   resolveInstallPlan,
+  resolveGitHubApiAssetUrl,
+  shouldDownloadPackageSpec,
   toHomeRelativePath,
 } from '../skill-hub/agentic-ai-lite/scripts/install-maintainer.mjs';
 
@@ -37,6 +41,7 @@ test('builds agi installer plan under the user Agentic AI home', () => {
   assert.equal(plan.codexHome, join(home, '.agentic-ai/codex-home'));
   assert.equal(plan.projectsDir, join(home, '.agentic-ai/projects'));
   assert.equal(plan.binDir, join(home, '.agentic-ai/bin'));
+  assert.equal(plan.cacheDir, join(home, '.agentic-ai/cache'));
   assert.equal(plan.agiPath, join(home, '.agentic-ai/bin/agi'));
   assert.deepEqual(buildNpmInstallArgs(plan), [
     'install',
@@ -45,6 +50,91 @@ test('builds agi installer plan under the user Agentic AI home', () => {
     join(home, '.agentic-ai'),
     'file:/tmp/agentic-ai.tgz',
   ]);
+});
+
+test('installMaintainer passes release tag into the install plan', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agentic-ai-install-'));
+  const result = installMaintainer({
+    home,
+    env: {},
+    releaseTag: 'v0.1.8',
+    skipNpmInstall: true,
+    updateProfile: false,
+  });
+
+  assert.equal(
+    result.packageSpec,
+    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.8/agentic-ai.tgz',
+  );
+});
+
+test('installer downloads release URLs before npm install', () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), 'agentic-ai-cache-'));
+  const calls = [];
+  const downloaded = prepareNpmPackageSpec({
+    packageSpec: DEFAULT_PACKAGE_SPEC,
+    cacheDir,
+    consoleImpl: { log() {} },
+    spawnSyncImpl: (command, args) => {
+      calls.push({ command, args });
+      const output = args[args.indexOf('--output') + 1];
+      writeFileSync(output, 'tgz');
+      return { status: 0 };
+    },
+  });
+
+  assert.equal(downloaded, join(cacheDir, 'agentic-ai.tgz'));
+  assert.equal(calls[0].command, 'curl');
+  assert.deepEqual(calls[0].args.slice(0, 2), ['--fail', '--location']);
+  assert.equal(calls[0].args.includes('--retry-all-errors'), true);
+  assert.equal(calls[0].args.at(-1), DEFAULT_PACKAGE_SPEC);
+  assert.equal(shouldDownloadPackageSpec(DEFAULT_PACKAGE_SPEC), true);
+  assert.equal(shouldDownloadPackageSpec('@flonest/agentic-ai@test'), false);
+});
+
+test('installer can fall back to GitHub asset API downloads', () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), 'agentic-ai-cache-'));
+  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.8' });
+  const calls = [];
+  const downloaded = prepareNpmPackageSpec({
+    packageSpec,
+    cacheDir,
+    consoleImpl: { log() {} },
+    spawnSyncImpl: (command, args, options = {}) => {
+      calls.push({ command, args, options });
+      const url = args.at(-1);
+      if (url === packageSpec) return { status: 22 };
+      if (String(url).includes('/releases/tags/v0.1.8')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            assets: [{ name: 'agentic-ai.tgz', url: 'https://api.github.test/assets/123' }],
+          }),
+        };
+      }
+      if (url === 'https://api.github.test/assets/123') {
+        const output = args[args.indexOf('--output') + 1];
+        writeFileSync(output, 'tgz');
+        return { status: 0 };
+      }
+      return { status: 1 };
+    },
+  });
+
+  assert.equal(downloaded, join(cacheDir, 'agentic-ai.tgz'));
+  assert.equal(calls.some((call) => call.args.includes('Accept: application/octet-stream')), true);
+  assert.deepEqual(parseGitHubReleasePackageSpec(packageSpec), {
+    repository: 'flonest-app/agentic-ai-skills',
+    tag: 'v0.1.8',
+    asset: 'agentic-ai.tgz',
+  });
+  assert.equal(resolveGitHubApiAssetUrl({
+    packageSpec,
+    spawnSyncImpl: () => ({
+      status: 0,
+      stdout: JSON.stringify({ assets: [{ name: 'other.tgz', url: 'nope' }] }),
+    }),
+  }), null);
 });
 
 test('installer creates runtime root and profile PATH hint without npm in dry mode', () => {

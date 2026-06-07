@@ -9,6 +9,7 @@ import { DEFAULT_CODEX_SANDBOX, runAppServerTask } from './appserver-task.mjs';
 import { processMaintainerOutput } from './proposal-controller.mjs';
 import { listPendingLabserverRequests, syncLabserverRequests } from './labserver-sync.mjs';
 import { reconcileSignedManagedSkills } from './reconcile-signed-skills.mjs';
+import { beginMaintainerProposal } from './write-maintainer-proposal.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const skillRoot = resolve(scriptDir, '..');
@@ -69,6 +70,8 @@ export function getMaintainerPaths({
     inboxDir: join(stateRoot, 'inbox'),
     outboxDir: join(stateRoot, 'outbox'),
     patchesDir: join(stateRoot, 'patches'),
+    proposalsDir: join(stateRoot, 'proposals'),
+    activeProposalPath: join(stateRoot, 'proposals', 'active.json'),
     configPath: join(stateRoot, 'maintainer-config.json'),
     statusPath: join(stateRoot, 'status.json'),
     threadRefPath: join(runtimeProjectDir, 'thread-ref.json'),
@@ -90,7 +93,7 @@ export function initializeMaintainerState({
 } = {}) {
   const paths = getMaintainerPaths({ projectRoot, stateDir, codexHome, sourceCodexHome });
 
-  for (const dir of [paths.stateRoot, paths.globalHome, paths.runtimeProjectDir, paths.codexHome, paths.maintainerSkillDir, paths.logsDir, paths.inboxDir, paths.outboxDir, paths.patchesDir]) {
+  for (const dir of [paths.stateRoot, paths.globalHome, paths.runtimeProjectDir, paths.codexHome, paths.maintainerSkillDir, paths.logsDir, paths.inboxDir, paths.outboxDir, paths.patchesDir, paths.proposalsDir]) {
     mkdirSync(dir, { recursive: true });
   }
   installHiddenMaintainerSkill(paths);
@@ -99,6 +102,7 @@ export function initializeMaintainerState({
   const managedSkills = listManagedSkills({ projectRoot: paths.projectRoot });
   const normalizedHistoryRoots = normalizeRoots(historyRoots, paths.projectRoot);
   const evidenceSources = buildConversationEvidenceSources({ paths, historyRoots: normalizedHistoryRoots });
+  const evidencePolicy = buildConversationEvidencePolicy({ paths, evidenceSources });
   const writePolicy = buildWritablePolicy({ projectRoot: paths.projectRoot, managedSkills });
   const authReady = hasCodexAuth(paths.codexHome);
   const now = new Date().toISOString();
@@ -113,13 +117,16 @@ export function initializeMaintainerState({
     codex_home: paths.codexHome,
     source_codex_home: paths.sourceCodexHome,
     maintainer_skill_path: paths.maintainerSkillPath,
+    maintainer_proposal_file: paths.activeProposalPath,
     thread_ref_path: paths.threadRefPath,
     codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
     codex_sessions_dir: join(paths.codexHome, 'sessions'),
     source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
     source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
+    evidence_cursor_path: join(paths.stateRoot, 'evidence-cursors.json'),
     model,
     interval_minutes: intervalMinutes,
+    conversation_evidence_policy: evidencePolicy,
     conversation_evidence_sources: evidenceSources,
     read_roots: Array.from(new Set([paths.projectRoot, ...evidenceSources.map((source) => source.path)])),
     write_policy: writePolicy,
@@ -149,9 +156,13 @@ export function initializeMaintainerState({
       codex_sessions_dir: join(paths.codexHome, 'sessions'),
       source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
       source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
+      evidence_cursor_path: join(paths.stateRoot, 'evidence-cursors.json'),
+      conversation_evidence_policy: evidencePolicy,
       conversation_evidence_sources: evidenceSources,
       inbox_dir: paths.inboxDir,
       outbox_dir: paths.outboxDir,
+      proposals_dir: paths.proposalsDir,
+      maintainer_proposal_file: paths.activeProposalPath,
       managed_skill_count: managedSkills.length,
     },
   });
@@ -161,6 +172,10 @@ export function initializeMaintainerState({
 
 export function hasCodexAuth(codexHome) {
   return existsSync(join(codexHome, 'auth.json'));
+}
+
+export function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
 export function buildWritablePolicy({ projectRoot = process.cwd(), managedSkills = [] } = {}) {
@@ -181,39 +196,12 @@ export function buildWritablePolicy({ projectRoot = process.cwd(), managedSkills
 }
 
 export function buildMaintainerPrompt({
-  projectRoot = process.cwd(),
-  historyRoots = [],
-  evidenceSources,
-  conversationFile,
   triggerMessage,
-  managedSkills = [],
-  revisionRequests = [],
-  maintainerPromptPath = getMaintainerPaths({ projectRoot }).maintainerPromptPath,
+  firstTurn = true,
 } = {}) {
-  const paths = getMaintainerPaths({ projectRoot });
-  const sources = evidenceSources || buildConversationEvidenceSources({
-    paths,
-    historyRoots: normalizeRoots(historyRoots, projectRoot),
-  });
-  return [
-    readFileSync(maintainerPromptPath, 'utf8').trim(),
-    '',
-    'Controller message:',
-    triggerMessage ? triggerMessage : 'Run a project maintenance pass from the latest available durable evidence.',
-    '',
-    `Project root: ${projectRoot}`,
-    `Conversation file: ${conversationFile || 'none provided'}`,
-    `History roots: ${historyRoots.length > 0 ? historyRoots.join(', ') : 'none configured'}`,
-    'Conversation evidence sources:',
-    sources.length > 0
-      ? sources.map((source) => `- ${source.kind}: ${source.path}`).join('\n')
-      : '- none configured',
-    `Managed skills: ${managedSkills.length > 0 ? managedSkills.map((skill) => skill.skill_id).join(', ') : 'none registered'}`,
-    'Pending labserver revision requests:',
-    revisionRequests.length > 0
-      ? revisionRequests.map(formatRevisionRequestForPrompt).join('\n')
-      : '- none',
-  ].join('\n');
+  const verb = firstTurn ? 'start' : 'continue';
+  const goal = triggerMessage || 'maintaining this project';
+  return `Use agentic-ai-maintainer skill: ${verb} ${goal}`;
 }
 
 export async function runMaintenanceOnce({
@@ -225,13 +213,15 @@ export async function runMaintenanceOnce({
   conversationFile,
   triggerMessage,
   model = 'gpt-5.5',
+  runAppServerTaskImpl = runAppServerTask,
+  processMaintainerOutputImpl = processMaintainerOutput,
+  beginMaintainerProposalImpl = beginMaintainerProposal,
 } = {}) {
   const { paths } = initializeMaintainerState({ projectRoot, stateDir, codexHome, sourceCodexHome, historyRoots, model });
   if (!hasCodexAuth(paths.codexHome)) {
     return readMaintainerStatus({ projectRoot, stateDir });
   }
 
-  const managedSkills = listManagedSkills({ projectRoot: paths.projectRoot });
   const labserverUrl = getLabserverUrl();
   let signedReconcile = null;
   if (process.env.AGENTIC_AI_AUTO_RECONCILE_SIGNED !== 'false') {
@@ -254,16 +244,17 @@ export async function runMaintenanceOnce({
   }
   const revisionRequests = listPendingLabserverRequests({ inboxDir: paths.inboxDir });
   const threadRef = readProjectThreadRef(paths);
+  const maintainerSkillHash = sha256File(paths.maintainerSkillPath);
+  const firstTurn = !threadRef.thread_id;
   const normalizedHistoryRoots = normalizeRoots(historyRoots, paths.projectRoot);
   const evidenceSources = buildConversationEvidenceSources({ paths, historyRoots: normalizedHistoryRoots });
   const prompt = buildMaintainerPrompt({
-    projectRoot: paths.projectRoot,
-    historyRoots: normalizedHistoryRoots,
-    evidenceSources,
-    conversationFile: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
     triggerMessage,
-    managedSkills,
-    revisionRequests,
+    firstTurn,
+  });
+  const activeProposal = beginMaintainerProposalImpl({
+    projectRoot: paths.projectRoot,
+    file: paths.activeProposalPath,
   });
 
   writeMaintainerStatus({
@@ -275,18 +266,23 @@ export async function runMaintenanceOnce({
   });
 
   try {
-    const result = await runAppServerTask({
+    const result = await runAppServerTaskImpl({
       cwd: paths.projectRoot,
       codexHome: paths.codexHome,
       model,
       prompt,
       threadId: threadRef.thread_id,
-      skillPath: paths.maintainerSkillPath,
+      skillPath: null,
+      fallbackSkillPath: null,
       skillName: DEFAULT_MAINTAINER_SKILL_ID,
       stream: false,
       approvalPolicy: 'never',
       sandbox: DEFAULT_CODEX_SANDBOX,
       serviceName: 'agentic_ai_maintainer',
+      extraEnv: {
+        AGENTIC_AI_PROPOSAL_FILE: paths.activeProposalPath,
+        AGENTIC_AI_PROJECT_ROOT: paths.projectRoot,
+      },
     });
 
     if (result.authRequired) {
@@ -303,14 +299,15 @@ export async function runMaintenanceOnce({
       ...threadRef,
       thread_id: result.threadId,
       last_turn_id: result.turnId,
+      maintainer_skill_sha256: maintainerSkillHash,
       last_trigger_message: triggerMessage || null,
       last_conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
     });
     const timestamp = new Date().toISOString().replaceAll(':', '-');
-    const controller = await processMaintainerOutput({
+    const controller = await processMaintainerOutputImpl({
       projectRoot: paths.projectRoot,
       paths,
-      output: result.output,
+      proposalFile: paths.activeProposalPath,
       labserverUrl,
     });
     const patchPath = join(paths.patchesDir, `${timestamp}.json`);
@@ -321,6 +318,7 @@ export async function runMaintenanceOnce({
       thread_id: result.threadId,
       turn_id: result.turnId,
       raw_output: result.output,
+      proposal_file: activeProposal.path,
       parsed_output: controller.parsed,
       proposal_results: controller.proposal_results,
       outbox_results: controller.outbox_results,
@@ -328,6 +326,9 @@ export async function runMaintenanceOnce({
       inbound_sync: inboundSync,
       signed_reconcile: signedReconcile,
       revision_requests: revisionRequests.map((request) => request.request_id),
+      first_turn: firstTurn,
+      skill_attached: result.skillAttached,
+      maintainer_skill_sha256: maintainerSkillHash,
       trigger_message: triggerMessage || null,
       conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
       created_at: new Date().toISOString(),
@@ -341,6 +342,7 @@ export async function runMaintenanceOnce({
       message: 'Maintainer turn completed.',
       extra: {
         last_patch: patchPath,
+        proposal_results: controller.proposal_results,
         outbox_results: controller.outbox_results,
         submission: controller.submission,
         inbound_sync: inboundSync,
@@ -349,6 +351,10 @@ export async function runMaintenanceOnce({
         thread_id: result.threadId,
         turn_id: result.turnId,
         reused_thread: result.reusedThread,
+        first_turn: firstTurn,
+        skill_attached: result.skillAttached,
+        maintainer_skill_sha256: maintainerSkillHash,
+        maintainer_proposal_file: activeProposal.path,
         thread_ref_path: paths.threadRefPath,
         thread_ref_updated_at: nextThreadRef.updated_at,
         codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
@@ -367,15 +373,6 @@ export async function runMaintenanceOnce({
       message: err.message,
     });
   }
-}
-
-function formatRevisionRequestForPrompt(request) {
-  return [
-    `- request_id: ${request.request_id}`,
-    `  source: ${request.source?.kind || 'unknown'} ${request.source?.repo || ''}#${request.source?.number || ''}`.trimEnd(),
-    `  request: ${String(request.sanitized_request || '').replace(/\s+/g, ' ').slice(0, 500)}`,
-    '  response: emit a sanitized upstream proposal with "response_to" set to this request_id',
-  ].join('\n');
 }
 
 export function readProjectThreadRef(paths) {
@@ -409,6 +406,7 @@ export function writeProjectThreadRef(paths, threadRef) {
 }
 
 function buildProjectThreadRefMetadata(paths) {
+  const conversationEvidenceSources = buildConversationEvidenceSources({ paths, historyRoots: [] });
   return {
     schema_version: 1,
     project_id: paths.projectId,
@@ -419,7 +417,37 @@ function buildProjectThreadRefMetadata(paths) {
     codex_sessions_dir: join(paths.codexHome, 'sessions'),
     source_codex_session_index_path: join(paths.sourceCodexHome, 'session_index.jsonl'),
     source_codex_sessions_dir: join(paths.sourceCodexHome, 'sessions'),
-    conversation_evidence_sources: buildConversationEvidenceSources({ paths, historyRoots: [] }),
+    evidence_cursor_path: join(paths.stateRoot, 'evidence-cursors.json'),
+    conversation_evidence_policy: buildConversationEvidencePolicy({ paths, evidenceSources: conversationEvidenceSources }),
+    conversation_evidence_sources: conversationEvidenceSources,
+  };
+}
+
+export function buildConversationEvidencePolicy({ paths, evidenceSources = [] }) {
+  const sourceIndexPath = resolve(join(paths.sourceCodexHome, 'session_index.jsonl'));
+  const sourceSessionsDir = resolve(join(paths.sourceCodexHome, 'sessions'));
+  const isolatedSessionsDir = resolve(join(paths.codexHome, 'sessions'));
+  const sourceHomeIsIsolatedHome = resolve(paths.sourceCodexHome) === resolve(paths.codexHome);
+  const includesIsolatedSessions = evidenceSources.some((source) => resolve(source.path) === isolatedSessionsDir);
+  const hasSourceHistory = existsSync(sourceIndexPath) || existsSync(sourceSessionsDir);
+  const status = sourceHomeIsIsolatedHome
+    ? 'invalid-source-is-isolated-maintainer-home'
+    : hasSourceHistory
+      ? 'ready'
+      : 'missing-source-codex-history';
+
+  return {
+    required: true,
+    status,
+    source_codex_home: resolve(paths.sourceCodexHome),
+    source_codex_session_index_path: sourceIndexPath,
+    source_codex_sessions_dir: sourceSessionsDir,
+    source_index_exists: existsSync(sourceIndexPath),
+    source_sessions_exists: existsSync(sourceSessionsDir),
+    isolated_maintainer_codex_home: resolve(paths.codexHome),
+    isolated_maintainer_sessions_dir: isolatedSessionsDir,
+    excludes_isolated_maintainer_sessions: !includesIsolatedSessions,
+    note: 'The real project knowledge comes from the human/source Codex home. The isolated Agentic AI Codex home is for maintainer auth and thread continuity only.',
   };
 }
 
@@ -452,7 +480,9 @@ export function installHiddenMaintainerSkill(paths) {
     '# Agentic AI Maintainer',
     '',
     'This skill is installed in the Agentic AI private Codex home, not in the normal user Codex home or project skill directory.',
-    'Helper scripts are available beside this file under `scripts/`; use paths like `scripts/discover-project-conversations.mjs` when needed.',
+    `Helper scripts are available beside this file under \`${join(paths.maintainerSkillDir, 'scripts')}\`. Start each turn with \`node ${join(paths.maintainerSkillDir, 'scripts', 'collect-maintainer-context.mjs')} --project-root "$PWD" --source-codex-home ${paths.sourceCodexHome} --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --limit 20\`.`,
+    `When reading human Codex JSONL, use \`node ${join(paths.maintainerSkillDir, 'scripts', 'read-conversation-slice.mjs')} --project-root "$PWD" --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --file <candidate-jsonl> --max-lines 120 --mark-read\` so follow-up turns do not reread old chat lines.`,
+    `Write proposals only with \`node ${join(paths.maintainerSkillDir, 'scripts', 'write-maintainer-proposal.mjs')}\`; the active proposal file is \`${paths.activeProposalPath}\` and is also exposed as \`$AGENTIC_AI_PROPOSAL_FILE\`.`,
     '',
     body,
     '',

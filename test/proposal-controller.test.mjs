@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,6 +14,10 @@ import {
   listManagedSkills,
   registerManagedSkill,
 } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
+import {
+  addMaintainerProposal,
+  beginMaintainerProposal,
+} from '../runtime/agentic-ai-maintainer/scripts/write-maintainer-proposal.mjs';
 
 test('parses maintainer JSON with a short preface', () => {
   const parsed = parseMaintainerJson(`Using agentic-ai-maintainer for this smoke test.\n${maintainerOutput([{
@@ -68,6 +73,98 @@ test('applies valid AGENTS.md patch and creates missing AGENTS.md', async () => 
   const updated = await processMaintainerOutput({ projectRoot, output: updateOutput });
   assert.equal(updated.proposal_results[0].status, 'applied');
   assert.match(readFileSync(join(projectRoot, 'AGENTS.md'), 'utf8'), /Prefer small patches/);
+});
+
+test('consumes script-owned proposal file and ignores bogus final model text', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-proposal-file-'));
+  const proposalFile = beginMaintainerProposal({ projectRoot, summary: 'script-owned proposal' }).path;
+  addMaintainerProposal({
+    projectRoot,
+    file: proposalFile,
+    proposal: {
+      classification: 'project-specific',
+      target: 'AGENTS.md',
+      action: 'create',
+      rationale: 'capture durable project rule',
+      proposed_patch: [
+        '--- /dev/null',
+        '+++ b/AGENTS.md',
+        '@@ -0,0 +1,2 @@',
+        '+# Instructions',
+        '+Use the script-owned proposal file.',
+        '',
+      ].join('\n'),
+    },
+  });
+
+  const result = await processMaintainerOutput({
+    projectRoot,
+    proposalFile,
+    output: '{"summary":"bogus","proposals":[{"classification":"project-specific","target":"src/app.js","action":"update"}]}',
+  });
+
+  assert.equal(result.parsed.source, 'proposal-file');
+  assert.equal(result.parsed.valid, true);
+  assert.equal(result.proposal_results[0].status, 'applied');
+  assert.match(readFileSync(join(projectRoot, 'AGENTS.md'), 'utf8'), /script-owned proposal file/);
+});
+
+test('missing or invalid proposal file applies nothing and records rejection', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-missing-proposal-file-'));
+  const result = await processMaintainerOutput({
+    projectRoot,
+    proposalFile: join(projectRoot, '.agentic-ai/proposals/active.json'),
+    output: maintainerOutput([{
+      classification: 'project-specific',
+      target: 'AGENTS.md',
+      action: 'create',
+      rationale: 'this final text must be ignored',
+      proposed_patch: [
+        '--- /dev/null',
+        '+++ b/AGENTS.md',
+        '@@ -0,0 +1,2 @@',
+        '+# Instructions',
+        '+Should not be written.',
+        '',
+      ].join('\n'),
+    }]),
+  });
+
+  assert.equal(result.parsed.valid, false);
+  assert.equal(result.proposal_results[0].status, 'rejected');
+  assert.match(result.proposal_results[0].reason, /classification unclear/);
+  assert.equal(existsSync(join(projectRoot, 'AGENTS.md')), false);
+});
+
+test('warns when an applied AGENTS.md file is ignored by git', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-proposals-'));
+  writeFileSync(join(projectRoot, '.gitignore'), '/AGENTS.md\n');
+  const init = spawnSync('git', ['init'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+  });
+  if (init.status !== 0) return;
+
+  const result = await processMaintainerOutput({
+    projectRoot,
+    output: maintainerOutput([{
+      classification: 'project-specific',
+      target: 'AGENTS.md',
+      action: 'create',
+      rationale: 'capture durable project rule',
+      proposed_patch: [
+        '--- /dev/null',
+        '+++ b/AGENTS.md',
+        '@@ -0,0 +1,2 @@',
+        '+# Instructions',
+        '+Be careful.',
+        '',
+      ].join('\n'),
+    }]),
+  });
+
+  assert.equal(result.proposal_results[0].status, 'applied');
+  assert.match(result.proposal_results[0].warnings[0], /ignored by git/);
 });
 
 test('rejects product code and unmanaged skill edits', async () => {
@@ -266,6 +363,40 @@ test('queues sanitized outbox and marks delivery results', async () => {
   assert.equal(delivered.results[0].status, 'delivered');
   const deliveredPayload = JSON.parse(readFileSync(queued.outbox_results[0].path, 'utf8'));
   assert.equal(deliveredPayload.delivery.status, 'delivered');
+});
+
+test('queues same-target proposals without outbox filename collisions', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-proposals-'));
+  const result = await processMaintainerOutput({
+    projectRoot,
+    output: maintainerOutput([
+      {
+        classification: 'generic',
+        target: 'skillhub',
+        action: 'record',
+        rationale: 'first reusable lesson',
+        upstream_feedback: 'First generic runtime lesson.',
+      },
+      {
+        classification: 'generic',
+        target: 'skillhub',
+        action: 'record',
+        rationale: 'second reusable lesson',
+        upstream_feedback: 'Second generic runtime lesson.',
+      },
+    ]),
+  });
+
+  assert.equal(result.outbox_results.length, 2);
+  assert.notEqual(result.outbox_results[0].path, result.outbox_results[1].path);
+
+  const first = JSON.parse(readFileSync(result.outbox_results[0].path, 'utf8'));
+  const second = JSON.parse(readFileSync(result.outbox_results[1].path, 'utf8'));
+  assert.match(first.proposal_id, /^[a-f0-9]{32}$/);
+  assert.match(second.proposal_id, /^[a-f0-9]{32}$/);
+  assert.notEqual(first.proposal_id, second.proposal_id);
+  assert.match(first.private_context, /First generic/);
+  assert.match(second.private_context, /Second generic/);
 });
 
 test('preserves outbox retry state when labserver submission fails', async () => {

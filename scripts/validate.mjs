@@ -12,6 +12,7 @@ const mjsFiles = [
   'runtime/agentic-ai-maintainer/scripts/appserver-task.mjs',
   'runtime/agentic-ai-maintainer/scripts/maintainer-runtime.mjs',
   'runtime/agentic-ai-maintainer/scripts/proposal-controller.mjs',
+  'runtime/agentic-ai-maintainer/scripts/write-maintainer-proposal.mjs',
   'runtime/agentic-ai-maintainer/scripts/labserver-sync.mjs',
   'runtime/agentic-ai-maintainer/scripts/reconcile-signed-skills.mjs',
   'runtime/agentic-ai-maintainer/scripts/start-maintainer.mjs',

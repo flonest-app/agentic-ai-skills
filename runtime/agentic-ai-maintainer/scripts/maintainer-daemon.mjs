@@ -86,6 +86,8 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [] }) {
       project_root: projectRoot,
       status: status.status,
       message: status.message,
+      proposal_results: status.proposal_results || [],
+      outbox_results: status.outbox_results || [],
       thread_id: status.thread_id || null,
       turn_id: status.turn_id || null,
       thread_ref_path: status.thread_ref_path || null,

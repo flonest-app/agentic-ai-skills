@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_RELEASE_REPOSITORY = 'flonest-app/agentic-ai-skills';
@@ -30,21 +30,46 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export function installMaintainer({
   agenticAiHome,
   packageSpec,
+  releaseRepository,
+  releaseTag,
+  releaseAsset,
   npmCommand = process.env.NPM_BIN || 'npm',
+  downloadCommand = process.env.AGENTIC_AI_DOWNLOAD_BIN || 'curl',
   shellProfile,
   skipNpmInstall = false,
   updateProfile = true,
   env = process.env,
   home = homedir(),
+  spawnSyncImpl = spawnSync,
+  consoleImpl = console,
 } = {}) {
-  const plan = resolveInstallPlan({ agenticAiHome, packageSpec, shellProfile, updateProfile, env, home });
+  const plan = resolveInstallPlan({
+    agenticAiHome,
+    packageSpec,
+    releaseRepository,
+    releaseTag,
+    releaseAsset,
+    shellProfile,
+    updateProfile,
+    env,
+    home,
+  });
 
-  for (const dir of [plan.agenticAiHome, plan.codexHome, plan.projectsDir, plan.binDir]) {
+  for (const dir of [plan.agenticAiHome, plan.codexHome, plan.projectsDir, plan.binDir, plan.cacheDir]) {
     mkdirSync(dir, { recursive: true });
   }
 
   if (!skipNpmInstall) {
-    const install = spawnSync(npmCommand, buildNpmInstallArgs(plan), {
+    const npmPackageSpec = prepareNpmPackageSpec({
+      packageSpec: plan.packageSpec,
+      cacheDir: plan.cacheDir,
+      downloadCommand,
+      env,
+      spawnSyncImpl,
+      consoleImpl,
+    });
+    consoleImpl.log(`Installing Agentic AI CLI from ${npmPackageSpec}`);
+    const install = spawnSyncImpl(npmCommand, buildNpmInstallArgs({ ...plan, packageSpec: npmPackageSpec }), {
       stdio: 'inherit',
       env,
     });
@@ -87,6 +112,7 @@ export function resolveInstallPlan({
     codexHome: join(root, 'codex-home'),
     projectsDir: join(root, 'projects'),
     binDir: join(root, 'bin'),
+    cacheDir: join(root, 'cache'),
     agiPath: join(root, 'bin', binName),
     profilePath: resolve(shellProfile || env.AGENTIC_AI_PROFILE || join(home, '.profile')),
     updateProfile,
@@ -106,6 +132,163 @@ export function buildNpmInstallArgs(plan) {
   return ['install', '--global', '--prefix', plan.agenticAiHome, plan.packageSpec];
 }
 
+export function prepareNpmPackageSpec({
+  packageSpec,
+  cacheDir,
+  downloadCommand = 'curl',
+  env = process.env,
+  spawnSyncImpl = spawnSync,
+  consoleImpl = console,
+} = {}) {
+  if (!shouldDownloadPackageSpec(packageSpec)) return packageSpec;
+  return downloadReleasePackage({
+    packageSpec,
+    cacheDir,
+    downloadCommand,
+    env,
+    spawnSyncImpl,
+    consoleImpl,
+  });
+}
+
+export function shouldDownloadPackageSpec(packageSpec) {
+  try {
+    const url = new URL(packageSpec);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+export function downloadReleasePackage({
+  packageSpec,
+  cacheDir,
+  downloadCommand = 'curl',
+  env = process.env,
+  spawnSyncImpl = spawnSync,
+  consoleImpl = console,
+} = {}) {
+  if (!cacheDir) throw new Error('cacheDir is required to download release package');
+  mkdirSync(cacheDir, { recursive: true });
+  const assetName = safeAssetName(packageSpec);
+  const target = join(cacheDir, assetName);
+  consoleImpl.log(`Downloading Agentic AI release: ${packageSpec}`);
+  const download = runCurlDownload({
+    downloadCommand,
+    url: packageSpec,
+    target,
+    env,
+    spawnSyncImpl,
+  });
+  if (download.status === 0 && existsSync(target)) return target;
+
+  const fallback = resolveGitHubApiAssetUrl({
+    packageSpec,
+    downloadCommand,
+    env,
+    spawnSyncImpl,
+  });
+  if (fallback) {
+    consoleImpl.log(`Primary download failed; retrying through GitHub asset API: ${fallback}`);
+    const apiDownload = runCurlDownload({
+      downloadCommand,
+      url: fallback,
+      target,
+      headers: ['Accept: application/octet-stream'],
+      env,
+      spawnSyncImpl,
+    });
+    if (apiDownload.status === 0 && existsSync(target)) return target;
+  }
+
+  throw new Error(`download failed for ${packageSpec}`);
+}
+
+export function resolveGitHubApiAssetUrl({
+  packageSpec,
+  downloadCommand = 'curl',
+  env = process.env,
+  spawnSyncImpl = spawnSync,
+} = {}) {
+  const parsed = parseGitHubReleasePackageSpec(packageSpec);
+  if (!parsed) return null;
+  const releaseUrl = parsed.tag === 'latest'
+    ? `https://api.github.com/repos/${parsed.repository}/releases/latest`
+    : `https://api.github.com/repos/${parsed.repository}/releases/tags/${encodeURIComponent(parsed.tag)}`;
+  const result = spawnSyncImpl(downloadCommand, [
+    '--fail',
+    '--location',
+    '--silent',
+    '--show-error',
+    releaseUrl,
+  ], {
+    encoding: 'utf8',
+    env,
+  });
+  if (result.status !== 0) return null;
+  try {
+    const release = JSON.parse(result.stdout || '{}');
+    const asset = (release.assets || []).find((candidate) => candidate.name === parsed.asset);
+    return asset?.url || null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseGitHubReleasePackageSpec(packageSpec) {
+  let url;
+  try {
+    url = new URL(packageSpec);
+  } catch {
+    return null;
+  }
+  if (url.hostname !== 'github.com') return null;
+  const latest = url.pathname.match(/^\/(?<owner>[^/]+)\/(?<repo>[^/]+)\/releases\/latest\/download\/(?<asset>[^/]+)$/);
+  if (latest?.groups) {
+    return {
+      repository: `${latest.groups.owner}/${latest.groups.repo}`,
+      tag: 'latest',
+      asset: latest.groups.asset,
+    };
+  }
+  const tagged = url.pathname.match(/^\/(?<owner>[^/]+)\/(?<repo>[^/]+)\/releases\/download\/(?<tag>[^/]+)\/(?<asset>[^/]+)$/);
+  if (tagged?.groups) {
+    return {
+      repository: `${tagged.groups.owner}/${tagged.groups.repo}`,
+      tag: tagged.groups.tag,
+      asset: tagged.groups.asset,
+    };
+  }
+  return null;
+}
+
+function runCurlDownload({
+  downloadCommand,
+  url,
+  target,
+  headers = [],
+  env,
+  spawnSyncImpl,
+}) {
+  const args = [
+    '--fail',
+    '--location',
+    '--retry',
+    '5',
+    '--retry-delay',
+    '2',
+    '--retry-all-errors',
+    '--connect-timeout',
+    '20',
+  ];
+  for (const header of headers) args.push('--header', header);
+  args.push('--output', target, url);
+  return spawnSyncImpl(downloadCommand, args, {
+    stdio: 'inherit',
+    env,
+  });
+}
+
 export function ensurePathInProfile({ profilePath, binDir, home = homedir() }) {
   mkdirSync(dirname(profilePath), { recursive: true });
   const profileBin = toHomeRelativePath(binDir, home);
@@ -117,6 +300,15 @@ export function ensurePathInProfile({ profilePath, binDir, home = homedir() }) {
   const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
   writeFileSync(profilePath, `${content}${prefix}${marker}\n${line}\n`);
   return true;
+}
+
+function safeAssetName(packageSpec) {
+  try {
+    const url = new URL(packageSpec);
+    return basename(url.pathname) || DEFAULT_RELEASE_ASSET;
+  } catch {
+    return DEFAULT_RELEASE_ASSET;
+  }
 }
 
 export function toHomeRelativePath(path, home = homedir()) {
@@ -141,7 +333,7 @@ function parseArgs(argv) {
     else if (arg === '--no-profile') parsed.updateProfile = false;
     else if (arg === '--skip-npm-install') parsed.skipNpmInstall = true;
     else if (arg === '--help') {
-      console.log('Usage: install-maintainer.mjs [--agentic-ai-home ~/.agentic-ai] [--release-tag latest|v0.1.0] [--package URL]');
+      console.log('Usage: install-maintainer.mjs [--agentic-ai-home ~/.agentic-ai] [--release-tag latest|v0.1.8] [--package URL]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

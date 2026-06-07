@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,7 +57,7 @@ const result = spawnSync(process.execPath, [
 ], {
   cwd: process.cwd(),
   stdio: 'inherit',
-  env: process.env,
+  env: childEnv(),
 });
 
 process.exit(result.status ?? signalExitCode(result.signal) ?? 1);
@@ -72,55 +74,38 @@ async function runDefaultAgi(rawArgs) {
   ], {
     cwd: process.cwd(),
     stdio: 'inherit',
-    env: process.env,
+    env: childEnv(),
   });
   process.exit(result.status ?? signalExitCode(result.signal) ?? 1);
 }
 
 async function ensureRuntimeReady(args) {
-  const {
-    getMaintainerPaths,
-    hasCodexAuth,
-    initializeMaintainerState,
-  } = await import('../runtime/agentic-ai-maintainer/scripts/maintainer-runtime.mjs');
   const projectRoot = resolve(readOption(args, '--project-root') || process.cwd());
   const codexHome = readOption(args, '--codex-home');
-  const sourceCodexHome = readOption(args, '--source-codex-home');
-  const historyRoots = readRepeatedOption(args, '--history-root');
-  const intervalMinutes = Number(readOption(args, '--interval-minutes') || 60);
-  const model = readOption(args, '--model') || 'gpt-5.5';
-  const initialized = initializeMaintainerState({
-    projectRoot,
-    codexHome,
-    sourceCodexHome,
-    historyRoots,
-    intervalMinutes,
-    model,
-  });
-  const paths = getMaintainerPaths({ projectRoot, codexHome, sourceCodexHome });
+  const runtimeCodexHome = resolve(codexHome || join(getAgenticAiHome(), 'codex-home'));
 
-  if (hasCodexAuth(paths.codexHome)) return initialized;
+  if (hasCodexAuth(runtimeCodexHome)) return { codex_home: runtimeCodexHome };
 
   console.log('First run: Agentic AI needs Codex auth for its isolated runtime home.');
-  console.log(`Auth will be stored under ${paths.codexHome}`);
+  console.log(`Auth will be stored under ${runtimeCodexHome}`);
   const result = spawnSync(process.execPath, [
     resolve(scriptRoot, 'codex-login.mjs'),
     '--codex-home',
-    paths.codexHome,
+    runtimeCodexHome,
   ], {
     cwd: projectRoot,
     stdio: 'inherit',
-    env: process.env,
+    env: childEnv(),
   });
 
   if (result.status !== 0) {
     process.exit(result.status ?? signalExitCode(result.signal) ?? 1);
   }
-  if (!hasCodexAuth(paths.codexHome)) {
-    console.error(`Codex auth was not written under ${paths.codexHome}.`);
+  if (!hasCodexAuth(runtimeCodexHome)) {
+    console.error(`Codex auth was not written under ${runtimeCodexHome}.`);
     process.exit(1);
   }
-  return initialized;
+  return { codex_home: runtimeCodexHome };
 }
 
 function normalizeProjectArg(argv) {
@@ -138,19 +123,35 @@ function readOption(argv, name) {
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-function readRepeatedOption(argv, name) {
-  const values = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === name) values.push(argv[i + 1]);
-  }
-  return values.filter(Boolean);
-}
-
 function signalExitCode(signal) {
   if (!signal) return null;
   if (signal === 'SIGINT') return 130;
   if (signal === 'SIGTERM') return 143;
   return 1;
+}
+
+function getAgenticAiHome() {
+  return resolve(process.env.AGENTIC_AI_HOME || join(homedir(), '.agentic-ai'));
+}
+
+function hasCodexAuth(codexHome) {
+  return existsSync(join(codexHome, 'auth.json'));
+}
+
+function childEnv(extra = {}) {
+  return {
+    ...process.env,
+    NODE_OPTIONS: nodeOptionsWithoutExperimentalWarningNoise(process.env.NODE_OPTIONS),
+    ...extra,
+  };
+}
+
+function nodeOptionsWithoutExperimentalWarningNoise(value = '') {
+  const existing = String(value || '').trim();
+  if (existing.split(/\s+/).some((option) => option === '--no-warnings' || option.startsWith('--no-warnings='))) {
+    return existing;
+  }
+  return [existing, '--no-warnings=ExperimentalWarning'].filter(Boolean).join(' ');
 }
 
 function printHelp() {

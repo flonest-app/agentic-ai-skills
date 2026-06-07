@@ -8,6 +8,7 @@ import { DEFAULT_CODEX_SANDBOX } from '../runtime/agentic-ai-maintainer/scripts/
 import { registerManagedSkill } from '../runtime/agentic-ai-maintainer/scripts/managed-registry.mjs';
 import {
   DEFAULT_LABSERVER_URL,
+  buildConversationEvidencePolicy,
   buildConversationEvidenceSources,
   buildMaintainerPrompt,
   buildWritablePolicy,
@@ -19,6 +20,7 @@ import {
   readProjectThreadRef,
   readMaintainerStatus,
   requestMaintainerStop,
+  runMaintenanceOnce,
   writeProjectThreadRef,
 } from '../runtime/agentic-ai-maintainer/scripts/maintainer-runtime.mjs';
 
@@ -57,6 +59,10 @@ test('initializes maintainer state with isolated codex home and auth-required st
     assert.equal(initialized.config.codex_session_index_path, join(initialized.paths.codexHome, 'session_index.jsonl'));
     assert.equal(initialized.config.codex_sessions_dir, join(initialized.paths.codexHome, 'sessions'));
     assert.equal(initialized.config.source_codex_home, join(process.env.HOME, '.codex'));
+    assert.equal(initialized.config.maintainer_proposal_file, join(projectRoot, '.agentic-ai/proposals/active.json'));
+    assert.equal(initialized.config.conversation_evidence_policy.required, true);
+    assert.equal(initialized.config.conversation_evidence_policy.source_codex_home, join(process.env.HOME, '.codex'));
+    assert.equal(initialized.config.conversation_evidence_policy.excludes_isolated_maintainer_sessions, true);
     assert.match(
       initialized.config.conversation_evidence_sources.map((source) => source.kind).join(','),
       /source-codex-sessions/,
@@ -65,8 +71,14 @@ test('initializes maintainer state with isolated codex home and auth-required st
     assert.equal(existsSync(initialized.paths.maintainerSkillPath), true);
     assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /name: agentic-ai-maintainer/);
     assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /Helper scripts are available/);
+    assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /collect-maintainer-context\.mjs/);
+    assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /read-conversation-slice\.mjs/);
+    assert.match(readFileSync(initialized.paths.maintainerSkillPath, 'utf8'), /write-maintainer-proposal\.mjs/);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/collect-maintainer-context.mjs')), true);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/read-conversation-slice.mjs')), true);
     assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/discover-project-conversations.mjs')), true);
     assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/proposal-controller.mjs')), true);
+    assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'scripts/write-maintainer-proposal.mjs')), true);
     assert.equal(existsSync(join(initialized.paths.maintainerSkillDir, 'references/maintainer-agent-prompt.md')), true);
     assert.equal(initialized.status.status, 'AUTH_REQUIRED');
     assert.equal(readMaintainerStatus({ projectRoot }).status, 'AUTH_REQUIRED');
@@ -110,6 +122,58 @@ test('resolves labserver URL default, override, and local-only disable', () => {
   }
 });
 
+test('runMaintenanceOnce uses script-owned proposal file instead of final provider text', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-maintainer-run-'));
+  const agenticHome = join(projectRoot, 'hidden-agentic-ai-home');
+  const previousHome = process.env.AGENTIC_AI_HOME;
+  const previousLabserverUrl = process.env.AGENTIC_AI_LABSERVER_URL;
+  process.env.AGENTIC_AI_HOME = agenticHome;
+  process.env.AGENTIC_AI_LABSERVER_URL = 'off';
+  mkdirSync(join(agenticHome, 'codex-home'), { recursive: true });
+  writeFileSync(join(agenticHome, 'codex-home/auth.json'), '{}\n');
+  const calls = [];
+
+  try {
+    const status = await runMaintenanceOnce({
+      projectRoot,
+      runAppServerTaskImpl: async (args) => {
+        calls.push({ kind: 'appserver', args });
+        assert.equal(args.extraEnv.AGENTIC_AI_PROJECT_ROOT, projectRoot);
+        assert.equal(args.extraEnv.AGENTIC_AI_PROPOSAL_FILE, join(projectRoot, '.agentic-ai/proposals/active.json'));
+        assert.equal(existsSync(args.extraEnv.AGENTIC_AI_PROPOSAL_FILE), true);
+        return {
+          authRequired: false,
+          threadId: 'thread-1',
+          reusedThread: false,
+          turnId: 'turn-1',
+          skillAttached: false,
+          output: '{"summary":"ignored final text","proposals":[{"target":"src/app.js"}]}',
+        };
+      },
+      processMaintainerOutputImpl: async (args) => {
+        calls.push({ kind: 'controller', args });
+        assert.equal(args.proposalFile, join(projectRoot, '.agentic-ai/proposals/active.json'));
+        assert.equal(args.output, undefined);
+        return {
+          parsed: { source: 'proposal-file', valid: true, proposals: [] },
+          proposal_results: [],
+          outbox_results: [],
+          submission: { results: [] },
+        };
+      },
+    });
+
+    assert.equal(status.status, 'COMPLETED');
+    assert.equal(status.maintainer_proposal_file, join(projectRoot, '.agentic-ai/proposals/active.json'));
+    assert.deepEqual(calls.map((call) => call.kind), ['appserver', 'controller']);
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;
+    else process.env.AGENTIC_AI_HOME = previousHome;
+    if (previousLabserverUrl === undefined) delete process.env.AGENTIC_AI_LABSERVER_URL;
+    else process.env.AGENTIC_AI_LABSERVER_URL = previousLabserverUrl;
+  }
+});
+
 test('builds controller-mediated write policy and sidecar prompt', () => {
   assert.equal(DEFAULT_CODEX_SANDBOX, 'workspace-write');
 
@@ -123,20 +187,23 @@ test('builds controller-mediated write policy and sidecar prompt', () => {
   assert.match(policy.note, /~\/\.agentic-ai/);
 
   const prompt = buildMaintainerPrompt({
-    projectRoot: '/tmp/project',
-    historyRoots: ['/tmp/history'],
-    conversationFile: '/tmp/history/chat.jsonl',
     triggerMessage: 'New maintainer message from file watcher',
-    managedSkills: [{ skill_id: 'demo' }],
   });
-  assert.match(prompt, /not the coding agent/);
-  assert.match(prompt, /Controller message/);
-  assert.match(prompt, /Conversation evidence sources/);
-  assert.match(prompt, /source-codex-sessions/);
-  assert.match(prompt, /New maintainer message from file watcher/);
-  assert.match(prompt, /chat\.jsonl/);
-  assert.match(prompt, /Return JSON only/);
-  assert.match(prompt, /Managed skills: demo/);
+  assert.equal(prompt, 'Use agentic-ai-maintainer skill: start New maintainer message from file watcher');
+  assert.equal(prompt.split('\n').length, 1);
+  assert.doesNotMatch(prompt, /## Output Contract/);
+  assert.doesNotMatch(prompt, /Source Codex evidence policy/);
+  assert.doesNotMatch(prompt, /collect-maintainer-context\.mjs/);
+  assert.doesNotMatch(prompt, /read-conversation-slice\.mjs/);
+  assert.doesNotMatch(prompt, /project_root=/);
+  assert.doesNotMatch(prompt, /config=/);
+
+  const followupPrompt = buildMaintainerPrompt({
+    firstTurn: false,
+  });
+  assert.equal(followupPrompt, 'Use agentic-ai-maintainer skill: continue maintaining this project');
+  assert.equal(followupPrompt.split('\n').length, 1);
+  assert.doesNotMatch(followupPrompt, /## Output Contract/);
 });
 
 test('builds conversation evidence sources from project and Codex history homes', () => {
@@ -158,6 +225,13 @@ test('builds conversation evidence sources from project and Codex history homes'
   ]);
   assert.equal(sources.find((source) => source.kind === 'source-codex-sessions').path, '/tmp/user-codex/sessions');
   assert.equal(sources.some((source) => source.path.includes('/tmp/agentic-home/codex-home/sessions')), false);
+
+  const policy = buildConversationEvidencePolicy({ paths, evidenceSources: sources });
+  assert.equal(policy.required, true);
+  assert.equal(policy.source_codex_home, '/tmp/user-codex');
+  assert.equal(policy.source_codex_sessions_dir, '/tmp/user-codex/sessions');
+  assert.equal(policy.isolated_maintainer_codex_home, '/tmp/agentic-home/codex-home');
+  assert.equal(policy.excludes_isolated_maintainer_sessions, true);
 });
 
 test('stores stop control outside project state and avoids killing unverified pids', () => {
