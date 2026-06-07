@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to prepare, for example v0.1.9
+        description: Release tag to prepare, for example v0.1.10
         required: true
         type: string
 
@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
           release_tag="${{ inputs.tag }}"
           if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must look like v0.1.9: $release_tag"
+            echo "Release tag must look like v0.1.10: $release_tag"
             exit 1
           fi
           git fetch origin main --tags

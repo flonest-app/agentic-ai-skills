@@ -10,8 +10,10 @@ import {
   buildGitHubReleasePackageSpec,
   buildNpmInstallArgs,
   installMaintainer,
+  pathIncludesDir,
   parseGitHubReleasePackageSpec,
   prepareNpmPackageSpec,
+  resolveProfilePaths,
   resolveInstallPlan,
   resolveGitHubApiAssetUrl,
   shouldDownloadPackageSpec,
@@ -57,14 +59,14 @@ test('installMaintainer passes release tag into the install plan', () => {
   const result = installMaintainer({
     home,
     env: {},
-    releaseTag: 'v0.1.9',
+    releaseTag: 'v0.1.10',
     skipNpmInstall: true,
     updateProfile: false,
   });
 
   assert.equal(
     result.packageSpec,
-    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.9/agentic-ai.tgz',
+    'https://github.com/flonest-app/agentic-ai-skills/releases/download/v0.1.10/agentic-ai.tgz',
   );
 });
 
@@ -94,7 +96,7 @@ test('installer downloads release URLs before npm install', () => {
 
 test('installer can fall back to GitHub asset API downloads', () => {
   const cacheDir = mkdtempSync(join(tmpdir(), 'agentic-ai-cache-'));
-  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.9' });
+  const packageSpec = buildGitHubReleasePackageSpec({ tag: 'v0.1.10' });
   const calls = [];
   const downloaded = prepareNpmPackageSpec({
     packageSpec,
@@ -104,7 +106,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
       calls.push({ command, args, options });
       const url = args.at(-1);
       if (url === packageSpec) return { status: 22 };
-      if (String(url).includes('/releases/tags/v0.1.9')) {
+      if (String(url).includes('/releases/tags/v0.1.10')) {
         return {
           status: 0,
           stdout: JSON.stringify({
@@ -125,7 +127,7 @@ test('installer can fall back to GitHub asset API downloads', () => {
   assert.equal(calls.some((call) => call.args.includes('Accept: application/octet-stream')), true);
   assert.deepEqual(parseGitHubReleasePackageSpec(packageSpec), {
     repository: 'flonest-app/agentic-ai-skills',
-    tag: 'v0.1.9',
+    tag: 'v0.1.10',
     asset: 'agentic-ai.tgz',
   });
   assert.equal(resolveGitHubApiAssetUrl({
@@ -153,8 +155,30 @@ test('installer creates runtime root and profile PATH hint without npm in dry mo
   assert.equal(existsSync(result.projectsDir), true);
   assert.equal(existsSync(result.binDir), true);
   assert.equal(result.profileChanged, true);
+  assert.deepEqual(result.profileChangedPaths, [profile]);
   assert.match(readFileSync(profile, 'utf8'), /export PATH="\$HOME\/\.agentic-ai\/bin:\$PATH"/);
   assert.equal(toHomeRelativePath(join(home, '.agentic-ai/bin'), home), '$HOME/.agentic-ai/bin');
+});
+
+test('installer updates login and shell startup profiles for common shells', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agentic-ai-install-'));
+  const result = installMaintainer({
+    home,
+    env: { SHELL: '/bin/bash', PATH: `/usr/bin:${join(home, '.agentic-ai/bin')}` },
+    packageSpec: '@flonest/agentic-ai@test',
+    skipNpmInstall: true,
+  });
+
+  const expectedProfiles = [join(home, '.profile'), join(home, '.bashrc')];
+  assert.deepEqual(result.profilePaths, expectedProfiles);
+  assert.deepEqual(result.profileChangedPaths, expectedProfiles);
+  assert.equal(result.pathReady, true);
+  for (const profile of expectedProfiles) {
+    assert.match(readFileSync(profile, 'utf8'), /export PATH="\$HOME\/\.agentic-ai\/bin:\$PATH"/);
+  }
+  const zshHome = mkdtempSync(join(tmpdir(), 'agentic-ai-install-'));
+  assert.deepEqual(resolveProfilePaths({ home: zshHome, env: { SHELL: '/bin/zsh' } }), [join(zshHome, '.profile'), join(zshHome, '.zshrc')]);
+  assert.equal(pathIncludesDir(join(home, '.agentic-ai/bin'), `$HOME/.agentic-ai/bin:/usr/bin`, home), true);
 });
 
 test('agi help advertises the no-argument command and not a login command', () => {
