@@ -386,7 +386,7 @@ function parseArgs(argv) {
     else if (arg === '--no-profile') parsed.updateProfile = false;
     else if (arg === '--skip-npm-install') parsed.skipNpmInstall = true;
     else if (arg === '--help') {
-      console.log('Usage: install-maintainer.mjs [--agentic-ai-home ~/.agentic-ai] [--release-tag latest|v0.1.12] [--package URL]');
+      console.log('Usage: install-maintainer.mjs [--agentic-ai-home ~/.agentic-ai] [--release-tag latest|v0.1.13] [--package URL]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);

@@ -277,7 +277,7 @@ function walk(root, currentPath, state) {
   if (!stat.isFile()) return;
   const rel = relative(root, currentPath).replaceAll('\\', '/');
   if (shouldSkipPath(rel, rel.split('/').at(-1))) return;
-  state.set(rel, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+  state.set(rel, `${stat.size}:${stat.mtimeMs}`);
 }
 
 function shouldSkipPath(rel, name) {
