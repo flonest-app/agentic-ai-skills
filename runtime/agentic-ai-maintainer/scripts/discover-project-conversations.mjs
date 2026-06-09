@@ -7,6 +7,9 @@ import { pathToFileURL } from 'node:url';
 
 const TEXT_FILE_RE = /\.(jsonl|json|md|txt|log)$/i;
 const MAX_READ_BYTES = 25 * 1024 * 1024;
+const MAX_JSONL_METADATA_BYTES = 100 * 1024 * 1024;
+const SOURCE_CODEX_EXACT_CWD_SCORE = 100;
+const SOURCE_CODEX_SUBDIR_CWD_SCORE = 80;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = parseArgs(process.argv.slice(2));
@@ -38,9 +41,37 @@ export function discoverProjectConversations({
   const roots = searchRoots.length > 0
     ? searchRoots.map((searchRoot) => resolve(searchRoot))
     : defaultConversationSearchRoots({ projectRoot: root, sourceCodexHome });
+  const sourceHome = resolve(sourceCodexHome);
+  const sourceSessionsRoot = join(sourceHome, 'sessions');
+  const sourceSessionRootIncluded = roots.some((searchRoot) => sameOrInside(searchRoot, sourceSessionsRoot) || sameOrInside(sourceSessionsRoot, searchRoot));
+  const textSearchRoots = roots.filter((searchRoot) => !isSourceCodexInternalRoot({ searchRoot, sourceHome }));
+  const candidateMap = new Map();
 
-  const candidates = discoverCandidatePaths({ terms, searchRoots: roots })
-    .map((filePath) => inspectConversationCandidate({ filePath, terms, projectTerms, changedFileTerms }))
+  if (sourceSessionRootIncluded) {
+    for (const candidate of discoverSourceCodexSessionsByCwd({
+      projectRoot: root,
+      sourceCodexHome: sourceHome,
+      terms,
+      projectTerms,
+      changedFileTerms,
+    })) {
+      candidateMap.set(candidate.filePath, candidate);
+    }
+  }
+
+  for (const filePath of discoverCandidatePaths({ terms, searchRoots: textSearchRoots })) {
+    if (candidateMap.has(resolve(filePath))) continue;
+    const candidate = inspectConversationCandidate({
+      filePath,
+      terms,
+      projectTerms,
+      changedFileTerms,
+      projectRoot: root,
+    });
+    candidateMap.set(candidate.filePath, candidate);
+  }
+
+  const candidates = Array.from(candidateMap.values())
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score || b.lastModifiedMs - a.lastModifiedMs)
     .slice(0, Number(limit || 50));
@@ -74,6 +105,26 @@ export function discoverCandidatePaths({ terms, searchRoots }) {
   const rg = spawnSync('rg', ['--version'], { encoding: 'utf8' });
   if (rg.status === 0) return discoverWithRipgrep({ terms, searchRoots: existingRoots });
   return discoverByWalking({ terms, searchRoots: existingRoots });
+}
+
+export function discoverSourceCodexSessionsByCwd({
+  projectRoot = process.cwd(),
+  sourceCodexHome = join(homedir(), '.codex'),
+  terms = [],
+  projectTerms = terms,
+  changedFileTerms = [],
+} = {}) {
+  const sessionsRoot = join(resolve(sourceCodexHome), 'sessions');
+  if (!existsSync(sessionsRoot)) return [];
+  return listJsonlFiles(sessionsRoot)
+    .map((filePath) => inspectConversationCandidate({
+      filePath,
+      terms,
+      projectTerms,
+      changedFileTerms,
+      projectRoot,
+    }))
+    .filter((candidate) => candidate.cwdMatch === 'exact' || candidate.cwdMatch === 'subdir');
 }
 
 function discoverWithRipgrep({ terms, searchRoots }) {
@@ -143,7 +194,13 @@ function walk(currentPath, files, terms) {
   if (terms.some((term) => lower.includes(term.toLowerCase()))) files.add(resolve(currentPath));
 }
 
-export function inspectConversationCandidate({ filePath, terms, projectTerms = terms, changedFileTerms = [] }) {
+export function inspectConversationCandidate({
+  filePath,
+  terms,
+  projectTerms = terms,
+  changedFileTerms = [],
+  projectRoot,
+}) {
   const stat = statSync(filePath);
   const ext = extname(filePath).toLowerCase();
   const pathLower = filePath.toLowerCase();
@@ -157,6 +214,12 @@ export function inspectConversationCandidate({ filePath, terms, projectTerms = t
   try {
     if (stat.size <= MAX_READ_BYTES && TEXT_FILE_RE.test(filePath)) text = readFileSync(filePath, 'utf8');
   } catch {}
+  let jsonlText = text;
+  if (ext === '.jsonl' && !jsonlText && stat.size <= MAX_JSONL_METADATA_BYTES) {
+    try {
+      jsonlText = readFileSync(filePath, 'utf8');
+    } catch {}
+  }
 
   const lowerText = text.toLowerCase();
   const matchedTerms = terms.filter((term) => lowerText.includes(term.toLowerCase()));
@@ -167,7 +230,9 @@ export function inspectConversationCandidate({ filePath, terms, projectTerms = t
   if (/\bAGENTS\.md\b|\.agents\/skills|managed skill|agentic-ai-managed/i.test(text)) {
     scoreParts.push(['agent_guidance_or_skill_match', 3]);
   }
-  const jsonl = ext === '.jsonl' ? inspectJsonl(text) : {};
+  const jsonl = ext === '.jsonl' ? inspectJsonl(jsonlText, { projectRoot }) : {};
+  if (jsonl.cwdMatch === 'exact') scoreParts.push(['source_cwd_exact_match', SOURCE_CODEX_EXACT_CWD_SCORE]);
+  else if (jsonl.cwdMatch === 'subdir') scoreParts.push(['source_cwd_subdir_match', SOURCE_CODEX_SUBDIR_CWD_SCORE]);
   const score = scoreParts.reduce((total, [, value]) => total + value, 0);
   return {
     filePath: resolve(filePath),
@@ -176,12 +241,30 @@ export function inspectConversationCandidate({ filePath, terms, projectTerms = t
     lastModified: new Date(stat.mtimeMs).toISOString(),
     lastModifiedMs: stat.mtimeMs,
     bytes: stat.size,
-    lineCount: text ? countLines(text) : null,
+    lineCount: jsonlText ? countLines(jsonlText) : null,
     matchedTerms,
     matchedProjectTerms,
     matchedChangedFiles,
     ...jsonl,
   };
+}
+
+function listJsonlFiles(root, files = []) {
+  let entries = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) {
+      listJsonlFiles(full, files);
+    } else if (entry.isFile() && extname(entry.name).toLowerCase() === '.jsonl') {
+      files.push(resolve(full));
+    }
+  }
+  return files;
 }
 
 function normalizeChangedFiles(changedFiles = [], projectRoot) {
@@ -208,10 +291,13 @@ function normalizeChangedFileTerms(changedFiles = [], projectRoot) {
   return Array.from(terms);
 }
 
-function inspectJsonl(text) {
+function inspectJsonl(text, { projectRoot } = {}) {
   let firstTimestamp = null;
   let cwd = null;
+  let cwdMatch = null;
+  const cwdValues = new Set();
   const detectedIds = new Set();
+  const root = projectRoot ? resolve(projectRoot) : null;
 
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -223,7 +309,15 @@ function inspectJsonl(text) {
       const id = event.conversation_id || event.session_id || payload.id || payload.session_id;
       if (typeof id === 'string') detectedIds.add(id);
       const candidateCwd = event.cwd || payload.cwd || payload.session?.cwd;
-      if (typeof candidateCwd === 'string' && !cwd) cwd = candidateCwd;
+      if (typeof candidateCwd === 'string') {
+        cwdValues.add(candidateCwd);
+        if (!cwd) cwd = candidateCwd;
+        if (root) {
+          const resolvedCwd = resolve(candidateCwd);
+          if (resolvedCwd === root) cwdMatch = 'exact';
+          else if (cwdMatch !== 'exact' && sameOrInside(resolvedCwd, root)) cwdMatch = 'subdir';
+        }
+      }
     } catch {
       // Session files may include non-JSON lines; text matching still makes them useful.
     }
@@ -232,8 +326,22 @@ function inspectJsonl(text) {
   return {
     firstTimestamp,
     cwd,
+    cwdValues: Array.from(cwdValues).slice(0, 20),
+    cwdMatch,
     detectedIds: Array.from(detectedIds).slice(0, 10),
   };
+}
+
+function isSourceCodexInternalRoot({ searchRoot, sourceHome }) {
+  const root = resolve(searchRoot);
+  const home = resolve(sourceHome);
+  return root === join(home, 'session_index.jsonl') || sameOrInside(root, join(home, 'sessions'));
+}
+
+function sameOrInside(child, parent) {
+  const normalizedChild = resolve(child);
+  const normalizedParent = resolve(parent);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}/`);
 }
 
 function countLines(text) {

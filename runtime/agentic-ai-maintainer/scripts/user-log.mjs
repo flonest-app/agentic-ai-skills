@@ -65,11 +65,17 @@ export function renderFriendlyEvent(event, payload = {}) {
     case 'maintainer.stopped':
       return payload.signal ? `Agentic AI maintainer stopped by ${payload.signal}.` : 'Agentic AI maintainer stopped.';
     case 'watch.started':
-      return `Watching for project changes. Idle window: ${Math.round((payload.idle_ms || 0) / 1000)}s.`;
+      return `Watching source Codex activity. Review after ${payload.source_turn_threshold || 3} completed turn${(payload.source_turn_threshold || 3) === 1 ? '' : 's'} and ${Math.round((payload.idle_ms || 0) / 1000)}s idle.`;
     case 'watch.change':
       return `Project activity detected. Waiting for edits to settle... (${count(payload.changed_files)} file${plural(payload.changed_files)} changed)`;
+    case 'watch.source_turns':
+      return `Coding-agent turn completed. Batching maintainer review... (${payload.pending_turn_count || 0}/${payload.source_turn_threshold || 3})`;
+    case 'watch.awaiting_conversation':
+      return 'Project files changed. Waiting for coding-agent conversation before maintainer review...';
+    case 'watch.conversation_change':
+      return 'Coding-agent conversation updated. Waiting for edits to settle...';
     case 'watch.idle_trigger':
-      return 'Project is idle. Reviewing recent coding-agent conversation and project changes...';
+      return 'Source Codex activity settled. Reviewing recent coding-agent conversation and project rules...';
     case 'maintainer.turn.start':
       return 'Running maintainer review...';
     case 'maintainer.turn.done':
@@ -92,10 +98,10 @@ function renderTurnDone(payload) {
   if (payload.status === 'ERROR') return `Maintainer turn failed: ${payload.message || 'unknown error'}`;
 
   const proposalResults = payload.proposal_results || [];
-  const applied = proposalResults.filter((result) => result.result === 'applied').length;
-  const queued = proposalResults.filter((result) => result.result === 'queued').length;
-  const rejected = proposalResults.filter((result) => result.result === 'rejected').length;
-  const outboxDelivered = (payload.outbox_results || []).filter((result) => result.result === 'delivered').length;
+  const applied = proposalResults.filter((result) => resultStatus(result) === 'applied').length;
+  const queued = proposalResults.filter((result) => resultStatus(result) === 'queued').length;
+  const rejected = proposalResults.filter((result) => resultStatus(result) === 'rejected').length;
+  const outboxDelivered = (payload.outbox_results || []).filter((result) => resultStatus(result) === 'delivered').length;
 
   if (applied || queued || rejected || outboxDelivered) {
     return [
@@ -117,4 +123,8 @@ function count(value) {
 
 function plural(value) {
   return count(value) === 1 ? '' : 's';
+}
+
+function resultStatus(result = {}) {
+  return result.status || result.result || null;
 }

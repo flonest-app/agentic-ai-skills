@@ -80,6 +80,7 @@ export function getMaintainerPaths({
     patchesDir: join(stateRoot, 'patches'),
     proposalsDir: join(stateRoot, 'proposals'),
     activeProposalPath: join(stateRoot, 'proposals', 'active.json'),
+    turnContextPath: join(stateRoot, 'turn-context.json'),
     configPath: join(stateRoot, 'maintainer-config.json'),
     statusPath: join(stateRoot, 'status.json'),
     threadRefPath: join(runtimeProjectDir, 'thread-ref.json'),
@@ -126,6 +127,7 @@ export function initializeMaintainerState({
     source_codex_home: paths.sourceCodexHome,
     maintainer_skill_path: paths.maintainerSkillPath,
     maintainer_proposal_file: paths.activeProposalPath,
+    maintainer_turn_context_file: paths.turnContextPath,
     thread_ref_path: paths.threadRefPath,
     codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
     codex_sessions_dir: join(paths.codexHome, 'sessions'),
@@ -171,6 +173,7 @@ export function initializeMaintainerState({
       outbox_dir: paths.outboxDir,
       proposals_dir: paths.proposalsDir,
       maintainer_proposal_file: paths.activeProposalPath,
+      maintainer_turn_context_file: paths.turnContextPath,
       managed_skill_count: managedSkills.length,
     },
   });
@@ -265,6 +268,12 @@ export async function runMaintenanceOnce({
     projectRoot: paths.projectRoot,
     file: paths.activeProposalPath,
   });
+  writeMaintainerTurnContext(paths, {
+    triggerMessage,
+    changedFiles,
+    conversationFile,
+    firstTurn,
+  });
 
   writeMaintainerStatus({
     projectRoot: paths.projectRoot,
@@ -290,6 +299,7 @@ export async function runMaintenanceOnce({
       serviceName: 'agentic_ai_maintainer',
       extraEnv: {
         AGENTIC_AI_PROPOSAL_FILE: paths.activeProposalPath,
+        AGENTIC_AI_TURN_CONTEXT_FILE: paths.turnContextPath,
         AGENTIC_AI_PROJECT_ROOT: paths.projectRoot,
         AGENTIC_AI_CHANGED_FILES: JSON.stringify(normalizeChangedFiles(changedFiles)),
       },
@@ -363,6 +373,7 @@ export async function runMaintenanceOnce({
           appserver_activity: result.activity || null,
           proposal_file_activity: proposalActivity,
           maintainer_proposal_file: activeProposal.path,
+          maintainer_turn_context_file: paths.turnContextPath,
           thread_ref_path: paths.threadRefPath,
           thread_ref_updated_at: nextThreadRef.updated_at,
           codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
@@ -406,6 +417,7 @@ export async function runMaintenanceOnce({
       maintainer_skill_sha256: maintainerSkillHash,
       trigger_message: triggerMessage || null,
       changed_files: normalizeChangedFiles(changedFiles),
+      turn_context_file: paths.turnContextPath,
       conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
       created_at: new Date().toISOString(),
     });
@@ -434,6 +446,7 @@ export async function runMaintenanceOnce({
         appserver_activity: result.activity || null,
         maintainer_skill_sha256: maintainerSkillHash,
         maintainer_proposal_file: activeProposal.path,
+        maintainer_turn_context_file: paths.turnContextPath,
         thread_ref_path: paths.threadRefPath,
         thread_ref_updated_at: nextThreadRef.updated_at,
         codex_session_index_path: join(paths.codexHome, 'session_index.jsonl'),
@@ -627,7 +640,7 @@ export function installHiddenMaintainerSkill(paths) {
     '',
     'This skill is installed in the Agentic AI private Codex home, not in the normal user Codex home or project skill directory.',
     `Helper scripts are available beside this file under \`${join(paths.maintainerSkillDir, 'scripts')}\`. Start each turn with \`node ${join(paths.maintainerSkillDir, 'scripts', 'collect-maintainer-context.mjs')} --project-root "$PWD" --source-codex-home ${paths.sourceCodexHome} --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --limit 20\`.`,
-    'The context helper automatically reads `$AGENTIC_AI_CHANGED_FILES` to rank source Codex chats that mention the active changed files.',
+    `The context helper reads active changed files from \`${paths.turnContextPath}\` and also supports \`$AGENTIC_AI_CHANGED_FILES\`.`,
     `When reading human Codex JSONL, use \`node ${join(paths.maintainerSkillDir, 'scripts', 'read-conversation-slice.mjs')} --project-root "$PWD" --cursor-path ${join(paths.stateRoot, 'evidence-cursors.json')} --file <candidate-jsonl> --max-lines 120 --mark-read\` so follow-up turns do not reread old chat lines.`,
     `Write proposals only with \`node ${join(paths.maintainerSkillDir, 'scripts', 'write-maintainer-proposal.mjs')}\`; the active proposal file is \`${paths.activeProposalPath}\` and is also exposed as \`$AGENTIC_AI_PROPOSAL_FILE\`.`,
     '',
@@ -747,6 +760,25 @@ function normalizeChangedFiles(changedFiles = []) {
       .map((file) => String(file || '').trim().replaceAll('\\', '/'))
       .filter(Boolean),
   )).slice(0, 50);
+}
+
+function writeMaintainerTurnContext(paths, {
+  triggerMessage,
+  changedFiles = [],
+  conversationFile,
+  firstTurn = false,
+} = {}) {
+  writeJson(paths.turnContextPath, {
+    schema_version: 1,
+    project_root: paths.projectRoot,
+    project_id: paths.projectId,
+    trigger_message: triggerMessage || null,
+    changed_files: normalizeChangedFiles(changedFiles),
+    conversation_file: conversationFile ? resolve(paths.projectRoot, conversationFile) : null,
+    first_turn: Boolean(firstTurn),
+    created_at: new Date().toISOString(),
+  });
+  return paths.turnContextPath;
 }
 
 function readProposalFileActivity(path, initialDocument = {}) {

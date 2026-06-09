@@ -37,19 +37,23 @@ Only after this bootstrap should the maintainer read selected files or conversat
 
 Evidence order matters:
 
-1. Read the highest-scoring human/source Codex conversation candidates first, especially those matching active changed files, `AGENTS.md`, or managed skills.
+1. Read unread human/source Codex conversation candidates whose `turn_context.cwd` matches this project first. `turn_context.cwd` is the source of truth; plain text path/name mentions in other projects are noise.
 2. Then read relevant project agent instructions and guidance docs.
 3. Read product code only after chat/docs show a durable rule, skill install, or managed-skill update need.
 
-Do not read full human Codex JSONL files on every turn. The maintainer app-server thread already has prior turn context. Read only unread chat lines with the evidence cursor:
+The bootstrap helper is the unread inbox for project conversations. On the first read of an exact-cwd source Codex session, read the full unread conversation from top to bottom so short replies like "yes" or "yep" keep their surrounding meaning. The reader emits a semantic transcript: user/developer/assistant messages, tool calls, tool outputs, cwd metadata, and task boundaries. Tool outputs are required evidence because they explain how the coding agent reached a decision. It filters telemetry, duplicate display echoes, and encrypted reasoning placeholders with no readable text. On later turns, use the stored evidence cursor and read only conversation lines that arrived after the previous maintainer read:
 
 ```bash
-node runtime/agentic-ai-maintainer/scripts/read-conversation-slice.mjs --project-root "$PWD" --cursor-path .agentic-ai/evidence-cursors.json --file <candidate-jsonl> --max-lines 120 --mark-read
+<candidate cursor.read_command from collect-maintainer-context.mjs>
 ```
 
-The cursor file lives in project `.agentic-ai/evidence-cursors.json`. It records the last JSONL line inspected per source conversation file, so follow-up turns do not replay old human/coding-agent chats.
+The cursor file lives in project `.agentic-ai/evidence-cursors.json`. It records the last JSONL line inspected per source conversation file, so follow-up turns do not replay old human/coding-agent chats. On follow-up turns, treat `AGENTS.md` and registered managed skills as the distilled memory from previous reads; combine that memory only with newly unread source conversation lines.
 
 The controller prompt is intentionally only a one-line goal trigger, such as `Use agentic-ai-maintainer skill: start maintaining this project` or `Use agentic-ai-maintainer skill: continue maintaining this project`. The cwd tells Codex which project is active; the skill body and CLI scripts own discovery, Codex-history handling, schema, and safety. Final assistant text is not trusted for maintenance actions. Write every proposal through `write-maintainer-proposal.mjs` to `$AGENTIC_AI_PROPOSAL_FILE`; `proposal-controller.mjs` then validates that file, rejects unsafe targets, and applies only allowlisted changes.
+
+In watch mode, the controller batches completed turns from the source Codex home whose `turn_context.cwd` is this project cwd, across all source Codex threads. A trigger means enough source Codex work has settled; do not assume it corresponds to exactly one file edit or one source thread.
+
+The runtime also writes `.agentic-ai/turn-context.json` before each turn. The bootstrap script reads it automatically so changed files are available even when a provider does not propagate environment variables into shell tools.
 
 Before finishing each turn, validate the script-owned proposal file:
 
@@ -68,7 +72,7 @@ The actual coding agent's Codex session history is one of the main sources of pr
 - The Agentic AI sidecar's isolated `~/.agentic-ai/codex-home` is operational state for auth and maintainer thread continuity; do not use its chats as project-learning evidence.
 - The project `.agentic-ai/logs/` directory and Codex app-server stderr are operational diagnostics, not project-learning evidence. Use them only to diagnose Agentic AI runtime failures.
 - Agentic AI owns only the project thread pointer under `thread-ref.json`.
-- The maintainer must still use Codex sessions as read-only evidence when they mention the project root, project name, files, `AGENTS.md`, or managed skills.
+- The maintainer must use source Codex sessions as read-only evidence only when their `turn_context.cwd` matches the project. Text-only mentions of the project path/name are lower-confidence noise and are not part of the core release path.
 - Discovery is mandatory triage, not exhaustive reading.
 
 Use the runtime helper to locate project-relevant session artifacts:
@@ -77,7 +81,7 @@ Use the runtime helper to locate project-relevant session artifacts:
 node runtime/agentic-ai-maintainer/scripts/discover-project-conversations.mjs --project-root "$PWD" --limit 20
 ```
 
-Default evidence sources include project `.conversations/`, the user's source Codex history at `~/.codex`, and any explicit `--history-root` values. They do not include the Agentic AI sidecar's private Codex home.
+Default evidence sources include project `.conversations/`, exact-cwd sessions from the user's source Codex history at `~/.codex`, and any explicit `--history-root` values. They do not include the Agentic AI sidecar's private Codex home.
 
 ## Project-Local Ownership
 

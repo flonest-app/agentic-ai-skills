@@ -63,10 +63,47 @@ test('collects focused maintainer context before ad hoc exploration', () => {
   assert.equal(context.evidence_cursor_path, cursorPath);
   assert.equal(context.conversation_discovery.candidates[0].cursor.previous_line, 0);
   assert.equal(context.conversation_discovery.candidates[0].cursor.next_unread_line, 1);
+  assert.equal(context.conversation_discovery.candidates[0].cwdMatch, 'exact');
+  assert.equal(context.conversation_discovery.candidates[0].cursor.read_mode, 'full-unread-source-cwd-conversation');
+  assert.equal(context.conversation_discovery.candidates[0].cursor.max_lines, 2);
   assert.match(context.conversation_discovery.candidates[0].cursor.read_command, /read-conversation-slice\.mjs/);
+  assert.match(context.conversation_discovery.candidates[0].cursor.read_command, /--max-lines 2/);
   assert.match(context.next_steps.join('\n'), /source Codex conversation candidates/);
   assert.match(context.next_steps.join('\n'), /Product code comes only after chat\/docs/);
   assert.match(context.next_steps.join('\n'), /write-maintainer-proposal\.mjs/);
   assert.match(context.next_steps.join('\n'), /controller reads the proposal file/);
-  assert.match(context.next_steps.join('\n'), /starts at the stored cursor/);
+  assert.match(context.next_steps.join('\n'), /full unread conversation/);
+  assert.match(context.next_steps.join('\n'), /stored cursor/);
+});
+
+test('reads changed files from turn context when env is unavailable', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-context-turn-'));
+  const sourceCodexHome = mkdtempSync(join(tmpdir(), 'source-codex-'));
+  const turnContextPath = join(projectRoot, '.agentic-ai/turn-context.json');
+  mkdirSync(join(projectRoot, '.agentic-ai'), { recursive: true });
+  writeFileSync(turnContextPath, JSON.stringify({
+    schema_version: 1,
+    changed_files: ['src/from-turn-context.js'],
+  }));
+
+  const previousChangedFiles = process.env.AGENTIC_AI_CHANGED_FILES;
+  const previousTurnContext = process.env.AGENTIC_AI_TURN_CONTEXT_FILE;
+  delete process.env.AGENTIC_AI_CHANGED_FILES;
+  process.env.AGENTIC_AI_TURN_CONTEXT_FILE = turnContextPath;
+
+  try {
+    const context = collectMaintainerContext({
+      projectRoot,
+      sourceCodexHome,
+      cursorPath: join(projectRoot, '.agentic-ai/evidence-cursors.json'),
+      limit: 5,
+    });
+
+    assert.deepEqual(context.changed_files, ['src/from-turn-context.js']);
+  } finally {
+    if (previousChangedFiles === undefined) delete process.env.AGENTIC_AI_CHANGED_FILES;
+    else process.env.AGENTIC_AI_CHANGED_FILES = previousChangedFiles;
+    if (previousTurnContext === undefined) delete process.env.AGENTIC_AI_TURN_CONTEXT_FILE;
+    else process.env.AGENTIC_AI_TURN_CONTEXT_FILE = previousTurnContext;
+  }
 });

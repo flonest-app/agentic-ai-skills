@@ -45,7 +45,8 @@ export function collectMaintainerContext({
 } = {}) {
   const root = resolve(projectRoot);
   const sourceHome = resolve(sourceCodexHome);
-  const normalizedChangedFiles = normalizeChangedFiles(changedFiles ?? changedFilesFromEnv(), root);
+  const changedFilesSource = changedFiles ?? changedFilesFromEnv() ?? changedFilesFromTurnContext(root);
+  const normalizedChangedFiles = normalizeChangedFiles(changedFilesSource, root);
   const managedSkills = safe(() => listManagedSkills({ projectRoot: root }), []);
   const managedVerification = safe(() => verifyManagedSkills({ projectRoot: root }), { ok: true, skills: [] });
   const conversationDiscovery = safe(() => discoverProjectConversations({
@@ -90,9 +91,10 @@ export function collectMaintainerContext({
       })),
     },
     next_steps: [
-      'First inspect the highest-scoring human/source Codex conversation candidates, especially matches for changed_files, AGENTS.md, or managed skills.',
+      'First inspect unread human/source Codex conversation candidates whose turn_context.cwd matches this project. Treat the helper output like an inbox of unread source work.',
       'Then read relevant agent_instruction_files and guidance_files. Product code comes only after chat/docs show a durable rule or skill need.',
-      'For human Codex JSONL, use read-conversation-slice.mjs; it starts at the stored cursor and prevents rereading full chats.',
+      'On follow-up turns, treat AGENTS.md and registered managed skills as distilled memory; combine them only with newly unread source conversation lines.',
+      'For human Codex JSONL, use each candidate read_command. On first read it may return the full unread conversation; later turns start at the stored cursor and avoid replaying old chat.',
       'Do not read isolated maintainer Codex sessions as project evidence.',
       'Use managed_skill_verification before proposing managed-skill updates or removals.',
       'Write proposals only with write-maintainer-proposal.mjs; the controller reads the proposal file and ignores final assistant prose.',
@@ -237,13 +239,15 @@ function trimConversationCandidate({ candidate, projectRoot, cursorPath }) {
   const cursor = getEvidenceFileCursor({ filePath: candidate.filePath, cursorPath });
   const previousLine = cursor.line > candidate.lineCount ? 0 : cursor.line;
   const unreadLineCount = Math.max(0, (candidate.lineCount || 0) - previousLine);
+  const readPlan = conversationReadPlan({ candidate, unreadLineCount });
   const readCommand = [
     'node',
     quoteShell(join(scriptDir, 'read-conversation-slice.mjs')),
     '--project-root', quoteShell(projectRoot),
     '--cursor-path', quoteShell(cursorPath),
     '--file', quoteShell(candidate.filePath),
-    '--max-lines', '120',
+    '--max-lines', String(readPlan.maxLines),
+    '--max-bytes', String(readPlan.maxBytes),
     '--mark-read',
   ].join(' ');
   return {
@@ -258,13 +262,33 @@ function trimConversationCandidate({ candidate, projectRoot, cursorPath }) {
     matchedChangedFiles: candidate.matchedChangedFiles,
     firstTimestamp: candidate.firstTimestamp,
     cwd: candidate.cwd,
+    cwdMatch: candidate.cwdMatch || null,
+    cwdValues: candidate.cwdValues || [],
     detectedIds: candidate.detectedIds,
     cursor: {
       previous_line: previousLine,
       next_unread_line: unreadLineCount > 0 ? previousLine + 1 : null,
       unread_line_count: unreadLineCount,
+      read_mode: readPlan.mode,
+      max_lines: readPlan.maxLines,
+      max_bytes: readPlan.maxBytes,
       read_command: readCommand,
     },
+  };
+}
+
+function conversationReadPlan({ candidate, unreadLineCount }) {
+  if ((candidate.cwdMatch === 'exact' || candidate.cwdMatch === 'subdir') && unreadLineCount > 0) {
+    return {
+      mode: 'full-unread-source-cwd-conversation',
+      maxLines: unreadLineCount,
+      maxBytes: Math.max(256 * 1024, Math.ceil((candidate.bytes || unreadLineCount * 4096) * 4)),
+    };
+  }
+  return {
+    mode: 'bounded-candidate-slice',
+    maxLines: 120,
+    maxBytes: 96 * 1024,
   };
 }
 
@@ -287,12 +311,21 @@ function normalizeRel(path) {
 
 function changedFilesFromEnv(env = process.env) {
   const value = env.AGENTIC_AI_CHANGED_FILES;
-  if (!value) return [];
+  if (!value) return null;
   try {
     const parsed = JSON.parse(value);
     if (Array.isArray(parsed)) return parsed;
   } catch {}
   return String(value).split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function changedFilesFromTurnContext(projectRoot, env = process.env) {
+  const contextPath = env.AGENTIC_AI_TURN_CONTEXT_FILE || join(projectRoot, '.agentic-ai', 'turn-context.json');
+  try {
+    const context = JSON.parse(readFileSync(contextPath, 'utf8'));
+    if (Array.isArray(context.changed_files)) return context.changed_files;
+  } catch {}
+  return [];
 }
 
 function normalizeChangedFiles(changedFiles = [], projectRoot) {

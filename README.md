@@ -18,6 +18,8 @@ agi
 
 Run `agi` from the project root. On first use it automatically opens the Codex login flow for the isolated Agentic AI runtime home. It then runs the maintainer in the foreground, logs to the terminal, and stops when the terminal closes or the user presses Ctrl+C.
 
+In watch mode, `agi` batches the user's normal Codex work instead of reviewing every save. It watches the source Codex home for completed turns whose `turn_context.cwd` matches this project, across all source Codex threads, and runs one maintainer review after 3 new completed turns have settled for the idle window. Set `AGENTIC_AI_TRIGGER_TURNS=5` to change the batch size.
+
 If Codex auth, quota, or account choice blocks the maintainer, switch only the isolated Agentic AI account with:
 
 ```bash
@@ -38,7 +40,7 @@ The full public maintainer runtime lives under `runtime/agentic-ai-maintainer`. 
 
 Codex owns the real appserver session history under `~/.agentic-ai/codex-home/session_index.jsonl` and `~/.agentic-ai/codex-home/sessions/`. Agentic AI only keeps a per-project thread pointer at `~/.agentic-ai/projects/<project-id>/thread-ref.json`; the first controller message creates the Codex thread, and later messages reuse that `thread_id` as follow-ups. Multiple project threads can run in parallel.
 
-The maintainer also reads the actual coding agent's Codex session history as project evidence. By default it searches project `.conversations/` and the user's source Codex home at `~/.codex`. It does not use its isolated runtime Codex home at `~/.agentic-ai/codex-home` as learning evidence; that home is for maintainer auth and thread continuity only. Discovery finds files that mention the project path or name, then reads only enough signal to produce durable `AGENTS.md` or managed-skill proposals.
+The maintainer also reads the actual coding agent's Codex session history as project evidence. By default it uses project `.conversations/` and the user's source Codex home at `~/.codex`. It does not use its isolated runtime Codex home at `~/.agentic-ai/codex-home` as learning evidence; that home is for maintainer auth and thread continuity only. Source Codex discovery uses `turn_context.cwd` as the source of truth, reads the full unread conversation the first time, then uses `.agentic-ai/evidence-cursors.json` so later reviews only read new conversation lines before distilling durable `AGENTS.md` or managed-skill proposals.
 
 ## Layout
 
@@ -55,12 +57,12 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 For now, release the CLI through GitHub Releases instead of npm:
 
 ```bash
-gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.14
+gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.15
 ```
 
 The prepare workflow signs `registry/manifest.json`, commits `registry/manifest.sig` to `main`, creates the tag on that signed commit, packs the GitHub Release asset, and publishes the live release.
 
-The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.14`.
+The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.15`.
 
 ## Project-Local Registry
 

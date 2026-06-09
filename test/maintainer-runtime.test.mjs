@@ -61,6 +61,7 @@ test('initializes maintainer state with isolated codex home and auth-required st
     assert.equal(initialized.config.codex_sessions_dir, join(initialized.paths.codexHome, 'sessions'));
     assert.equal(initialized.config.source_codex_home, join(process.env.HOME, '.codex'));
     assert.equal(initialized.config.maintainer_proposal_file, join(projectRoot, '.agentic-ai/proposals/active.json'));
+    assert.equal(initialized.config.maintainer_turn_context_file, join(projectRoot, '.agentic-ai/turn-context.json'));
     assert.equal(initialized.config.conversation_evidence_policy.required, true);
     assert.equal(initialized.config.conversation_evidence_policy.source_codex_home, join(process.env.HOME, '.codex'));
     assert.equal(initialized.config.conversation_evidence_policy.excludes_isolated_maintainer_sessions, true);
@@ -141,7 +142,10 @@ test('runMaintenanceOnce uses script-owned proposal file instead of final provid
         calls.push({ kind: 'appserver', args });
         assert.equal(args.extraEnv.AGENTIC_AI_PROJECT_ROOT, projectRoot);
         assert.equal(args.extraEnv.AGENTIC_AI_PROPOSAL_FILE, join(projectRoot, '.agentic-ai/proposals/active.json'));
+        assert.equal(args.extraEnv.AGENTIC_AI_TURN_CONTEXT_FILE, join(projectRoot, '.agentic-ai/turn-context.json'));
         assert.equal(existsSync(args.extraEnv.AGENTIC_AI_PROPOSAL_FILE), true);
+        const turnContext = JSON.parse(readFileSync(args.extraEnv.AGENTIC_AI_TURN_CONTEXT_FILE, 'utf8'));
+        assert.deepEqual(turnContext.changed_files, ['src/app.js']);
         return {
           authRequired: false,
           threadId: 'thread-1',
@@ -162,10 +166,12 @@ test('runMaintenanceOnce uses script-owned proposal file instead of final provid
           submission: { results: [] },
         };
       },
+      changedFiles: ['src/app.js'],
     });
 
     assert.equal(status.status, 'COMPLETED');
     assert.equal(status.maintainer_proposal_file, join(projectRoot, '.agentic-ai/proposals/active.json'));
+    assert.equal(status.maintainer_turn_context_file, join(projectRoot, '.agentic-ai/turn-context.json'));
     assert.deepEqual(calls.map((call) => call.kind), ['appserver', 'controller']);
   } finally {
     if (previousHome === undefined) delete process.env.AGENTIC_AI_HOME;

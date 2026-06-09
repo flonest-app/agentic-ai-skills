@@ -87,14 +87,21 @@ export function readConversationSlice({
     ? Math.floor(fromLine) - 1
     : storedLine;
   const boundedStart = Math.max(0, Math.min(startLine, lines.length));
+  const normalizedLines = lines.map((line, index) => normalizeJsonlEvent(line, index + 1));
   const emitted = [];
   let totalBytes = 0;
   let cursorLine = boundedStart;
 
   for (let index = boundedStart; index < lines.length; index += 1) {
     if (emitted.length >= maxLines) break;
-    const line = lines[index];
-    const normalized = normalizeJsonlEvent(line, index + 1);
+    const normalized = normalizedLines[index];
+    if (!isSemanticTranscriptEvent(normalized, {
+      previous: normalizedLines[index - 1],
+      next: normalizedLines[index + 1],
+    })) {
+      cursorLine = index + 1;
+      continue;
+    }
     const bytes = Buffer.byteLength(JSON.stringify(normalized), 'utf8');
     if (emitted.length > 0 && totalBytes + bytes > maxBytes) break;
     emitted.push(normalized);
@@ -124,6 +131,7 @@ export function readConversationSlice({
     max_lines: maxLines,
     max_bytes: maxBytes,
     mark_read: markRead,
+    transcript_view: 'semantic',
     cursor_updated: Boolean(updatedCursor),
     cursor: updatedCursor,
     events: emitted,
@@ -146,6 +154,7 @@ function normalizeJsonlEvent(line, lineNumber) {
       call_id: payload.call_id || null,
       name: payload.name || null,
       cwd: payload.cwd || payload.session?.cwd || null,
+      semantic_kind: semanticKind({ event, payload }),
       text: truncateText(contentText || outputText || argsText || '', 4000),
     };
   } catch {
@@ -155,6 +164,40 @@ function normalizeJsonlEvent(line, lineNumber) {
       text: truncateText(line, 4000),
     };
   }
+}
+
+function semanticKind({ event, payload }) {
+  if (event.type === 'session_meta') return 'session_metadata';
+  if (event.type === 'turn_context') return 'turn_context';
+  if (event.type === 'response_item' && payload.type === 'message') return `message:${payload.role || 'unknown'}`;
+  if (event.type === 'response_item' && payload.type === 'function_call') return `tool_call:${payload.name || 'unknown'}`;
+  if (event.type === 'response_item' && payload.type === 'function_call_output') return 'tool_output';
+  if (event.type === 'event_msg' && payload.type === 'task_started') return 'task_started';
+  if (event.type === 'event_msg' && payload.type === 'task_complete') return 'task_complete';
+  if (event.type === 'event_msg' && payload.type === 'user_message') return 'message:user';
+  if (event.type === 'event_msg' && payload.type === 'agent_message') return 'message:assistant';
+  return null;
+}
+
+function isSemanticTranscriptEvent(event, { previous = null, next = null } = {}) {
+  if (!event) return false;
+  if (event.type === 'raw') return Boolean(event.text);
+  if (event.semantic_kind === 'session_metadata' || event.semantic_kind === 'turn_context') return true;
+  if (event.semantic_kind === 'task_started' || event.semantic_kind === 'task_complete') return true;
+  if (event.semantic_kind?.startsWith('tool_call:') || event.semantic_kind === 'tool_output') return true;
+  if (event.semantic_kind?.startsWith('message:')) {
+    if (!event.text) return false;
+    return !isDuplicateDisplayMessage(event, previous) && !isDuplicateDisplayMessage(event, next);
+  }
+  return false;
+}
+
+function isDuplicateDisplayMessage(event, neighbor) {
+  if (!neighbor || !event.text || event.text !== neighbor.text) return false;
+  const eventIsDisplay = event.type === 'event_msg'
+    && (event.item_type === 'user_message' || event.item_type === 'agent_message');
+  const neighborIsMessage = neighbor.type === 'response_item' && neighbor.item_type === 'message';
+  return eventIsDisplay && neighborIsMessage;
 }
 
 function extractText(value) {

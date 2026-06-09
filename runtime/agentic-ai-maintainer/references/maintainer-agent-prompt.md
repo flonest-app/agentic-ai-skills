@@ -26,18 +26,21 @@ node <maintainer_script_dir>/collect-maintainer-context.mjs --project-root "$PWD
 
 - Use the bootstrap output as the map for the turn. It identifies AGENTS files, repo guidance files, project skills and ownership, managed-skill registry status, git state, and project-relevant source Codex conversation candidates.
 - Evidence priority is source Codex chat first, then project agent/docs guidance, then product code only when chat/docs point to a durable rule or skill need.
-- Conversation candidates that mention active changed files, `AGENTS.md`, or managed skills are more important than generic install/update chats.
+- Source Codex `turn_context.cwd` is the source of truth. Read candidates whose cwd matches this project; plain text path/name mentions from other projects are noise.
 - After bootstrap, read only the selected files needed to decide. Avoid open-ended `find`, broad `rg`, or reading logs unless the bootstrap output shows a specific reason.
-- Do not read full human Codex JSONL files. For each selected conversation candidate, use `read-conversation-slice.mjs` with the project evidence cursor so follow-up turns only see unread lines:
+- Treat the bootstrap helper like an unread inbox for source Codex work. On first read of an exact-cwd source session, read the full unread conversation from top to bottom so short replies keep their context. The reader emits a semantic transcript: user/developer/assistant messages, tool calls, tool outputs, cwd metadata, and task boundaries. Tool outputs are required evidence because they explain how the coding agent reached a decision. It filters telemetry, duplicate display echoes, and encrypted reasoning placeholders with no readable text. On later turns, the evidence cursor means follow-ups only see unread lines:
 
 ```bash
-node <maintainer_script_dir>/read-conversation-slice.mjs --project-root "$PWD" --cursor-path .agentic-ai/evidence-cursors.json --file <candidate-jsonl> --max-lines 120 --mark-read
+<candidate cursor.read_command from collect-maintainer-context.mjs>
 ```
 
 - The maintainer app-server thread already remembers prior turns. Treat `read-conversation-slice.mjs` output as incremental evidence, not a full transcript replay.
+- On follow-up turns, treat `AGENTS.md` and registered managed skills as the distilled memory from previous reads; combine that memory only with newly unread source conversation lines.
+- In watch mode, the controller batches completed turns from the source Codex home whose `turn_context.cwd` is this project cwd, across all source Codex threads. A trigger means enough source Codex work has settled; do not assume it maps to one file edit or one source thread.
+- The runtime writes `.agentic-ai/turn-context.json` before each turn. The bootstrap script reads it automatically so changed files are available even when a provider does not pass environment variables into shell tools.
 - Treat transcript discovery as triage. Do not read everything.
 - Inspect only enough chat evidence to classify durable lessons.
-- Prefer the provided conversation evidence sources. Use `discover-project-conversations.mjs` to find session files that mention the current project before reading raw ranges.
+- Prefer the provided conversation evidence sources. Use `discover-project-conversations.mjs` to find exact-cwd project session files before reading raw ranges.
 - Always distinguish source Codex evidence from maintainer Codex continuity: read project-relevant human/coding-agent sessions from `source_codex_home`, never from the isolated maintainer `codex_home`.
 - Do not use the Agentic AI sidecar's isolated `~/.agentic-ai/codex-home` chats as project-learning evidence. That home is for maintainer auth and thread continuity only.
 - Treat `.agentic-ai/logs/` and Codex app-server stderr as operational diagnostics, not project-learning evidence. Use them only to diagnose Agentic AI runtime failures.

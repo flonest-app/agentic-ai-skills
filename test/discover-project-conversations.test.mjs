@@ -9,7 +9,7 @@ import {
   discoverProjectConversations,
 } from '../runtime/agentic-ai-maintainer/scripts/discover-project-conversations.mjs';
 
-test('discovers Codex session artifacts that mention the project', () => {
+test('discovers source Codex session artifacts by exact cwd', () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-project-'));
   const sourceCodexHome = mkdtempSync(join(tmpdir(), 'agentic-ai-source-codex-'));
   const runtimeCodexHome = mkdtempSync(join(tmpdir(), 'agentic-ai-runtime-codex-'));
@@ -59,6 +59,37 @@ test('discovers Codex session artifacts that mention the project', () => {
   assert.equal(result.candidates[0].filePath, sessionPath);
   assert.equal(result.candidates[0].cwd, projectRoot);
   assert.deepEqual(result.candidates[0].detectedIds, ['thread-1']);
+  assert.equal(result.candidates[0].cwdMatch, 'exact');
+  assert.equal(result.candidates[0].scoreParts.source_cwd_exact_match, 100);
+});
+
+test('ignores source Codex sessions from another cwd that only mention the project', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-project-'));
+  const otherRoot = mkdtempSync(join(tmpdir(), 'agentic-ai-other-'));
+  const sourceCodexHome = mkdtempSync(join(tmpdir(), 'agentic-ai-source-codex-'));
+  const sessionDir = join(sourceCodexHome, 'sessions/2026/06/07');
+  mkdirSync(sessionDir, { recursive: true });
+
+  writeFileSync(join(sessionDir, 'rollout-noisy.jsonl'), [
+    JSON.stringify({
+      type: 'session_meta',
+      timestamp: '2026-06-07T00:00:00.000Z',
+      payload: { id: 'thread-noisy', cwd: otherRoot },
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-06-07T00:00:01.000Z',
+      payload: { text: `Debugging Agentic AI behavior for ${projectRoot} and AGENTS.md.` },
+    }),
+    '',
+  ].join('\n'));
+
+  const result = discoverProjectConversations({
+    projectRoot,
+    sourceCodexHome,
+  });
+
+  assert.equal(result.candidateCount, 0);
 });
 
 test('ranks source Codex sessions that mention changed files above generic project chats', () => {

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { discoverSourceCodexSessionsByCwd } from './discover-project-conversations.mjs';
 import {
   getMaintainerPaths,
   runMaintenanceOnce,
@@ -72,8 +74,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   logEvent(logger, 'maintainer.stopped', { project_root: projectRoot });
 }
 
-async function runMaintainerTurn({ projectRoot, args, changedFiles = [], logger }) {
-  const message = args.message || (
+async function runMaintainerTurn({ projectRoot, args, changedFiles = [], triggerMessage, logger }) {
+  const message = args.message || triggerMessage || (
     changedFiles.length > 0
       ? `Repository changed and stayed idle. Review the attached conversation evidence, AGENTS.md, and managed skills. Changed files: ${changedFiles.slice(0, 20).join(', ')}`
       : null
@@ -125,46 +127,99 @@ async function runMaintainerTurn({ projectRoot, args, changedFiles = [], logger 
   }
 
   logEvent(logger, 'maintainer.turn.done', {
-      project_root: projectRoot,
-      status: status.status,
-      message: status.message,
-      proposal_results: status.proposal_results || [],
-      outbox_results: status.outbox_results || [],
-      thread_id: status.thread_id || null,
-      turn_id: status.turn_id || null,
-      thread_ref_path: status.thread_ref_path || null,
-      codex_session_index_path: status.codex_session_index_path || null,
-    });
+    project_root: projectRoot,
+    status: status.status,
+    message: status.message,
+    proposal_results: status.proposal_results || [],
+    outbox_results: status.outbox_results || [],
+    thread_id: status.thread_id || null,
+    turn_id: status.turn_id || null,
+    thread_ref_path: status.thread_ref_path || null,
+    codex_session_index_path: status.codex_session_index_path || null,
+  });
 }
 
 async function runWatchLoop({ projectRoot, args, idleMs, pollMs, logger }) {
-  logEvent(logger, 'watch.started', { project_root: projectRoot, idle_ms: idleMs, poll_ms: pollMs });
-  let previous = collectProjectFileState(projectRoot);
-  let pending = null;
+  const sourceTurnThreshold = Math.max(1, Number(args.sourceTurnThreshold || process.env.AGENTIC_AI_TRIGGER_TURNS || 3));
+  logEvent(logger, 'watch.started', {
+    project_root: projectRoot,
+    idle_ms: idleMs,
+    poll_ms: pollMs,
+    source_turn_threshold: sourceTurnThreshold,
+  });
+  let sourceTurnState = collectSourceCodexTurnState({
+    projectRoot,
+    sourceCodexHome: args.sourceCodexHome,
+  });
+  let lastSourcePollAt = 0;
+  let pendingSourceTurns = 0;
+  let lastSourceActivityAt = null;
   let activeTurn = null;
 
   while (!shouldStop({ projectRoot })) {
     await sleep(pollMs);
-    if (activeTurn?.done) {
-      await activeTurn.promise;
-      activeTurn = null;
-      previous = collectProjectFileState(projectRoot);
-      if (pending) pending = { ...pending, changedAt: Date.now() };
+    if (activeTurn) {
+      if (activeTurn.done) {
+        await activeTurn.promise;
+        activeTurn = null;
+        sourceTurnState = collectSourceCodexTurnState({
+          projectRoot,
+          sourceCodexHome: args.sourceCodexHome,
+        });
+        lastSourcePollAt = 0;
+        pendingSourceTurns = 0;
+        lastSourceActivityAt = null;
+      }
+      continue;
     }
 
-    const next = collectProjectFileState(projectRoot);
-    const changedFiles = diffProjectFileState(previous, next);
-    if (changedFiles.length > 0) {
-      pending = mergePendingChangedFiles(pending, changedFiles, Date.now());
-      previous = next;
-      logEvent(logger, 'watch.change', { project_root: projectRoot, changed_files: pending.files });
+    const now = Date.now();
+    if (now - lastSourcePollAt >= Math.max(3000, pollMs)) {
+      lastSourcePollAt = now;
+      const nextSourceTurnState = collectSourceCodexTurnState({
+        projectRoot,
+        sourceCodexHome: args.sourceCodexHome,
+      });
+      const newTurnCount = countNewSourceCodexTurns(sourceTurnState, nextSourceTurnState);
+      if (newTurnCount > 0) {
+        pendingSourceTurns += newTurnCount;
+        lastSourceActivityAt = now;
+        logEvent(logger, 'watch.source_turns', {
+          project_root: projectRoot,
+          new_turn_count: newTurnCount,
+          pending_turn_count: pendingSourceTurns,
+          source_turn_threshold: sourceTurnThreshold,
+          session_count: nextSourceTurnState.sessionCount,
+        });
+      } else if (sourceCodexActivityChanged(sourceTurnState, nextSourceTurnState) && pendingSourceTurns > 0) {
+        lastSourceActivityAt = now;
+        logEvent(logger, 'watch.conversation_change', {
+          project_root: projectRoot,
+          candidate_count: nextSourceTurnState.sessionCount,
+        });
+      }
+      sourceTurnState = nextSourceTurnState;
     }
 
-    if (pending && !activeTurn && Date.now() - pending.changedAt >= idleMs) {
-      const files = pending.files;
-      pending = null;
-      logEvent(logger, 'watch.idle_trigger', { project_root: projectRoot, changed_files: files });
-      activeTurn = startQueuedMaintainerTurn({ projectRoot, args, changedFiles: files, logger });
+    if (
+      pendingSourceTurns >= sourceTurnThreshold
+      && lastSourceActivityAt
+      && Date.now() - lastSourceActivityAt >= idleMs
+    ) {
+      const triggerTurnCount = pendingSourceTurns;
+      pendingSourceTurns = 0;
+      lastSourceActivityAt = null;
+      logEvent(logger, 'watch.idle_trigger', {
+        project_root: projectRoot,
+        source_turn_count: triggerTurnCount,
+      });
+      activeTurn = startQueuedMaintainerTurn({
+        projectRoot,
+        args,
+        changedFiles: [],
+        triggerMessage: `Source Codex activity settled after ${triggerTurnCount} new completed turn${triggerTurnCount === 1 ? '' : 's'}. Review recent coding-agent conversation evidence, AGENTS.md, and managed skills.`,
+        logger,
+      });
     }
   }
 
@@ -187,9 +242,10 @@ function parseArgs(argv) {
     else if (arg === '--watch') parsed.watch = true;
     else if (arg === '--idle-ms') parsed.idleMs = Number(argv[++i]);
     else if (arg === '--poll-ms') parsed.pollMs = Number(argv[++i]);
+    else if (arg === '--source-turn-threshold') parsed.sourceTurnThreshold = Number(argv[++i]);
     else if (arg === '--json') {}
     else if (arg === '--help') {
-      console.log('Usage: maintainer-daemon.mjs [--project-root repo] [--interval-minutes 60] [--watch] [--idle-ms 10000] [--message text] [--conversation-file path] [--history-root path] [--source-codex-home path]');
+      console.log('Usage: maintainer-daemon.mjs [--project-root repo] [--interval-minutes 60] [--watch] [--idle-ms 10000] [--source-turn-threshold 3] [--message text] [--conversation-file path] [--history-root path] [--source-codex-home path]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -236,9 +292,103 @@ export function mergePendingChangedFiles(pending, changedFiles = [], changedAt =
   return { changedAt, files: Array.from(files).slice(0, 50) };
 }
 
-function startQueuedMaintainerTurn({ projectRoot, args, changedFiles, logger }) {
+export function collectSourceCodexTurnState({
+  projectRoot = process.cwd(),
+  sourceCodexHome,
+  limit = null,
+} = {}) {
+  const paths = getMaintainerPaths({ projectRoot, sourceCodexHome });
+  const candidates = discoverSourceCodexSessionsByCwd({
+    projectRoot: paths.projectRoot,
+    sourceCodexHome: paths.sourceCodexHome,
+  });
+  const sessionLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Number(limit)
+    : candidates.length;
+  const sessions = candidates
+    .sort((a, b) => b.lastModifiedMs - a.lastModifiedMs)
+    .slice(0, sessionLimit)
+    .map((candidate) => inspectSourceCodexTurns({
+      filePath: candidate.filePath,
+      projectRoot: paths.projectRoot,
+    }))
+    .filter((session) => session.projectRelevant)
+    .sort((a, b) => a.filePath.localeCompare(b.filePath));
+  const turnIds = Array.from(new Set(sessions.flatMap((session) => session.turnIds))).sort();
+  const fingerprintInput = sessions.map((session) => ({
+    filePath: session.filePath,
+    bytes: session.bytes,
+    lastModifiedMs: session.lastModifiedMs,
+    turnIds: session.turnIds,
+  }));
+  const fingerprint = createHash('sha256').update(JSON.stringify(fingerprintInput)).digest('hex');
+  return {
+    fingerprint,
+    sessionCount: sessions.length,
+    turnCount: turnIds.length,
+    turnIds,
+    latestModifiedMs: sessions.reduce((latest, session) => Math.max(latest, session.lastModifiedMs || 0), 0),
+    sessions,
+  };
+}
+
+export function sourceCodexActivityChanged(previous, next) {
+  if (!previous || !next) return false;
+  return previous.fingerprint !== next.fingerprint;
+}
+
+export function countNewSourceCodexTurns(previous, next) {
+  const previousIds = new Set(previous?.turnIds || []);
+  return (next?.turnIds || []).filter((turnId) => !previousIds.has(turnId)).length;
+}
+
+function inspectSourceCodexTurns({ filePath, projectRoot }) {
+  let stat;
+  let text = '';
+  try {
+    stat = statSync(filePath);
+    text = readFileSync(filePath, 'utf8');
+  } catch {
+    return {
+      filePath: resolve(filePath),
+      projectRelevant: false,
+      bytes: 0,
+      lastModifiedMs: 0,
+      turnIds: [],
+    };
+  }
+
+  const root = resolve(projectRoot);
+  const turnIds = [];
+  let projectRelevant = false;
+  let lineNo = 0;
+  for (const line of text.split('\n')) {
+    lineNo += 1;
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      const payload = event.payload || {};
+      const cwd = event.cwd || payload.cwd || payload.session?.cwd;
+      if (typeof cwd === 'string' && resolve(cwd) === root) projectRelevant = true;
+      if (event.type === 'event_msg' && payload.type === 'task_complete') {
+        const turnId = payload.turn_id || payload.turnId || `line-${lineNo}`;
+        turnIds.push(`${resolve(filePath)}:${turnId}`);
+      }
+    } catch {}
+  }
+
+  return {
+    filePath: resolve(filePath),
+    projectRelevant,
+    bytes: stat.size,
+    lastModifiedMs: stat.mtimeMs,
+    turnIds,
+  };
+}
+
+function startQueuedMaintainerTurn({ projectRoot, args, changedFiles, triggerMessage, logger }) {
   const state = { done: false, promise: null };
-  state.promise = runMaintainerTurn({ projectRoot, args, changedFiles, logger })
+  state.promise = runMaintainerTurn({ projectRoot, args, changedFiles, triggerMessage, logger })
     .catch((error) => {
       logEvent(logger, 'maintainer.turn.error', {
         project_root: projectRoot,
