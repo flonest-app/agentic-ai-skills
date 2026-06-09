@@ -65,17 +65,18 @@ export function renderFriendlyEvent(event, payload = {}) {
     case 'maintainer.stopped':
       return payload.signal ? `Agentic AI maintainer stopped by ${payload.signal}.` : 'Agentic AI maintainer stopped.';
     case 'watch.started':
-      return `Watching source Codex activity. Review after ${payload.source_turn_threshold || 3} completed turn${(payload.source_turn_threshold || 3) === 1 ? '' : 's'} and ${Math.round((payload.idle_ms || 0) / 1000)}s idle.`;
+      return `Watching source Codex activity. Review when unread context reaches ${payload.source_context_trigger_percent || 50}% and stays idle for ${Math.round((payload.idle_ms || 0) / 1000)}s.`;
     case 'watch.change':
       return `Project activity detected. Waiting for edits to settle... (${count(payload.changed_files)} file${plural(payload.changed_files)} changed)`;
-    case 'watch.source_turns':
-      return `Coding-agent turn completed. Batching maintainer review... (${payload.pending_turn_count || 0}/${payload.source_turn_threshold || 3})`;
+    case 'watch.source_context':
+      return `Coding-agent context updated. Unread maintainer context is about ${payload.unread_context_percent || 0}% (${payload.source_context_trigger_percent || 50}% trigger).`;
     case 'watch.awaiting_conversation':
       return 'Project files changed. Waiting for coding-agent conversation before maintainer review...';
     case 'watch.conversation_change':
       return 'Coding-agent conversation updated. Waiting for edits to settle...';
     case 'watch.idle_trigger':
-      return 'Source Codex activity settled. Reviewing recent coding-agent conversation and project rules...';
+      if (payload.reason === 'startup' || payload.reason === 'backlog') return 'Unread source Codex context is already ready. Reviewing coding-agent conversation and project rules...';
+      return 'Source Codex activity settled. Reviewing coding-agent conversation and project rules...';
     case 'maintainer.turn.start':
       return 'Running maintainer review...';
     case 'maintainer.turn.done':

@@ -51,7 +51,7 @@ The cursor file lives in project `.agentic-ai/evidence-cursors.json`. It records
 
 The controller prompt is intentionally only a one-line goal trigger, such as `Use agentic-ai-maintainer skill: start maintaining this project` or `Use agentic-ai-maintainer skill: continue maintaining this project`. The cwd tells Codex which project is active; the skill body and CLI scripts own discovery, Codex-history handling, schema, and safety. Final assistant text is not trusted for maintenance actions. Write every proposal through `write-maintainer-proposal.mjs` to `$AGENTIC_AI_PROPOSAL_FILE`; `proposal-controller.mjs` then validates that file, rejects unsafe targets, and applies only allowlisted changes.
 
-In watch mode, the controller batches completed turns from the source Codex home whose `turn_context.cwd` is this project cwd, across all source Codex threads. A trigger means enough source Codex work has settled; do not assume it corresponds to exactly one file edit or one source thread.
+In watch mode, the controller weighs unread source Codex evidence from exact-cwd sessions against the effective Codex context window. Empty/no-output source turns do not count. A trigger means enough unread source context has settled; do not assume it corresponds to exactly one file edit, one completed turn, or one source thread.
 
 The runtime also writes `.agentic-ai/turn-context.json` before each turn. The bootstrap script reads it automatically so changed files are available even when a provider does not propagate environment variables into shell tools.
 

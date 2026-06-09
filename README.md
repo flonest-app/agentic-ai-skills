@@ -18,7 +18,7 @@ agi
 
 Run `agi` from the project root. On first use it automatically opens the Codex login flow for the isolated Agentic AI runtime home. It then runs the maintainer in the foreground, logs to the terminal, and stops when the terminal closes or the user presses Ctrl+C.
 
-In watch mode, `agi` batches the user's normal Codex work instead of reviewing every save. It watches the source Codex home for completed turns whose `turn_context.cwd` matches this project, across all source Codex threads, and runs one maintainer review after 3 new completed turns have settled for the idle window. Set `AGENTIC_AI_TRIGGER_TURNS=5` to change the batch size.
+In watch mode, `agi` batches the user's normal Codex work instead of reviewing every save. It watches the source Codex home for exact-cwd source Codex sessions, ignores no-output/quota-blocked turns, and weighs only unread evidence after `.agentic-ai/evidence-cursors.json`. When unread source context reaches 50% of the effective Codex context window and stays idle for the settle window, it runs one maintainer review. Set `AGENTIC_AI_TRIGGER_CONTEXT_PERCENT=60` to change the threshold.
 
 If Codex auth, quota, or account choice blocks the maintainer, switch only the isolated Agentic AI account with:
 
@@ -57,12 +57,12 @@ The maintainer also reads the actual coding agent's Codex session history as pro
 For now, release the CLI through GitHub Releases instead of npm:
 
 ```bash
-gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.15
+gh workflow run prepare-release.yml --repo flonest-app/agentic-ai-skills -f tag=v0.1.16
 ```
 
 The prepare workflow signs `registry/manifest.json`, commits `registry/manifest.sig` to `main`, creates the tag on that signed commit, packs the GitHub Release asset, and publishes the live release.
 
-The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.15`.
+The bundled installer defaults to `https://github.com/flonest-app/agentic-ai-skills/releases/latest/download/agentic-ai.tgz`. For a pinned release, pass `--release-tag v0.1.16`.
 
 ## Project-Local Registry
 

@@ -36,7 +36,7 @@ node <maintainer_script_dir>/collect-maintainer-context.mjs --project-root "$PWD
 
 - The maintainer app-server thread already remembers prior turns. Treat `read-conversation-slice.mjs` output as incremental evidence, not a full transcript replay.
 - On follow-up turns, treat `AGENTS.md` and registered managed skills as the distilled memory from previous reads; combine that memory only with newly unread source conversation lines.
-- In watch mode, the controller batches completed turns from the source Codex home whose `turn_context.cwd` is this project cwd, across all source Codex threads. A trigger means enough source Codex work has settled; do not assume it maps to one file edit or one source thread.
+- In watch mode, the controller weighs unread source Codex evidence from exact-cwd sessions against the effective Codex context window. Empty/no-output source turns do not count. A trigger means enough unread source context has settled; do not assume it maps to one file edit, one completed turn, or one source thread.
 - The runtime writes `.agentic-ai/turn-context.json` before each turn. The bootstrap script reads it automatically so changed files are available even when a provider does not pass environment variables into shell tools.
 - Treat transcript discovery as triage. Do not read everything.
 - Inspect only enough chat evidence to classify durable lessons.
