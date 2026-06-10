@@ -34,6 +34,11 @@ export function classifyCodexError(input) {
   const rateLimitReachedType = details.rateLimitReachedType;
 
   if (/\b(unauthorized|forbidden|auth required|authentication required|not authenticated|invalid token|expired token)\b/.test(text)
+    || /\b(?:token_invalidated|refresh_token_invalidated)\b/.test(text)
+    || /authentication token has been invalidated/.test(text)
+    || /access token could not be refreshed/.test(text)
+    || /refresh token (?:was )?(?:revoked|invalidated|expired|already used)/.test(text)
+    || /\baction\s+relogin\b/.test(text)
     || /\b(?:401|403)\b/.test(text)) {
     return {
       kind: CODEX_ERROR_KINDS.AUTH_REQUIRED,

@@ -12,6 +12,28 @@ test('classifies Codex auth errors', () => {
 
   assert.equal(error.kind, CODEX_ERROR_KINDS.AUTH_REQUIRED);
   assert.equal(isCodexAuthError(error), true);
+  assert.equal(
+    classifyCodexError({
+      message: 'Your authentication token has been invalidated. Please try signing in again.',
+    }).kind,
+    CODEX_ERROR_KINDS.AUTH_REQUIRED,
+  );
+  assert.equal(
+    classifyCodexError({
+      error: { code: 'token_invalidated' },
+    }).kind,
+    CODEX_ERROR_KINDS.AUTH_REQUIRED,
+  );
+  assert.equal(
+    classifyCodexError({
+      data: {
+        errorCode: 'Auth',
+        action: 'relogin',
+        detail: 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+      },
+    }).kind,
+    CODEX_ERROR_KINDS.AUTH_REQUIRED,
+  );
 });
 
 test('classifies Codex usage and credit exhaustion errors', () => {

@@ -82,7 +82,7 @@ export async function runAppServerTask({
       const codexError = classifyCodexError(error);
       return isBlockingCodexError(codexError) ? { codexError } : null;
     });
-    if (rateLimits?.codexError && rateLimits.codexError.kind !== CODEX_ERROR_KINDS.AUTH_REQUIRED) {
+    if (rateLimits?.codexError) {
       return blockedTaskResult({ account, codexError: rateLimits.codexError });
     }
     const rateLimitCodexError = codexErrorFromRateLimits(rateLimits);
@@ -210,6 +210,7 @@ export class MiniAppServerClient extends EventEmitter {
     this.nextId = 1;
     this.pending = new Map();
     this.proc = null;
+    this.blockingCodexError = null;
   }
 
   async start() {
@@ -227,6 +228,9 @@ export class MiniAppServerClient extends EventEmitter {
   }
 
   request(method, params = {}, timeoutMs = 300000) {
+    if (this.blockingCodexError) {
+      return Promise.reject(createCodexBlockingError(this.blockingCodexError));
+    }
     const id = this.nextId++;
     return new Promise((resolveRequest, reject) => {
       const timeout = setTimeout(() => {
@@ -248,13 +252,19 @@ export class MiniAppServerClient extends EventEmitter {
       let latestError = null;
       let latestRateLimits = null;
       const activity = createEmptyAppServerActivity();
+      let onNotification;
+      let onCodexError;
       const finish = (turn, codexError = null) => {
-        this.off('notification', onNotification);
+        if (onNotification) this.off('notification', onNotification);
+        if (onCodexError) this.off('codex-error', onCodexError);
         if (stream) process.stdout.write('\n');
         mergeTurnActivity(activity, turn);
         resolveWait({ turn, output, codexError, activity, rateLimits: latestRateLimits });
       };
-      const onNotification = (message) => {
+      onCodexError = (codexError) => {
+        finish({ id: turnId, status: 'failed', error: codexError }, codexError);
+      };
+      onNotification = (message) => {
         activity.notification_count += 1;
         if (message.method === 'item/agentMessage/delta') {
           const delta = message.params?.delta || '';
@@ -288,6 +298,8 @@ export class MiniAppServerClient extends EventEmitter {
         finish(turn, codexError);
       };
       this.on('notification', onNotification);
+      this.on('codex-error', onCodexError);
+      if (this.blockingCodexError) onCodexError(this.blockingCodexError);
     });
   }
 
@@ -298,17 +310,32 @@ export class MiniAppServerClient extends EventEmitter {
   handleStderr(chunk) {
     const text = chunk.toString('utf8');
     appendDiagnostic(this.diagnosticLogPath, text);
-    if (/^(?:1|true|yes|verbose)$/i.test(process.env.AGENTIC_AI_CODEX_DIAGNOSTICS || '')) {
-      process.stderr.write(text);
-      return;
-    }
 
+    const verboseDiagnostics = /^(?:1|true|yes|verbose)$/i.test(process.env.AGENTIC_AI_CODEX_DIAGNOSTICS || '');
     this.stderrBuffer += text;
     const lines = this.stderrBuffer.split(/\r?\n/);
     this.stderrBuffer = lines.pop() || '';
     for (const line of lines) {
-      if (shouldMirrorCodexDiagnosticLine(line)) process.stderr.write(`${line}\n`);
+      const codexError = codexErrorFromDiagnosticLine(line);
+      if (codexError) {
+        this.blockOnCodexError(codexError, line);
+        continue;
+      }
+      if (verboseDiagnostics || shouldMirrorCodexDiagnosticLine(line)) process.stderr.write(`${line}\n`);
     }
+  }
+
+  blockOnCodexError(codexError, diagnosticLine = '') {
+    if (this.blockingCodexError) return;
+    this.blockingCodexError = codexError;
+    const error = createCodexBlockingError(codexError, diagnosticLine);
+    for (const [id, pending] of this.pending.entries()) {
+      clearTimeout(pending.timeout);
+      this.pending.delete(id);
+      pending.reject(error);
+    }
+    this.emit('codex-error', codexError);
+    this.stop();
   }
 
   handleLine(line) {
@@ -336,7 +363,16 @@ export function shouldMirrorCodexDiagnosticLine(line) {
   const text = String(line || '').trim();
   if (!text) return false;
   if (/ExperimentalWarning|default prompt too long|icon paths|plugin|skill loader|skill.*warning/i.test(text)) return false;
+  if (/^"(?:error|message|type|code|param|status)"\s*:/.test(text)) return false;
+  if (codexErrorFromDiagnosticLine(text)) return false;
   return /\b(error|fatal|panic|failed|auth|unauthorized|forbidden|quota|usage limit|rate limit|too many requests|credits|spend cap|429|server overloaded)\b/i.test(text);
+}
+
+export function codexErrorFromDiagnosticLine(line) {
+  const text = String(line || '').trim();
+  if (!text) return null;
+  const codexError = classifyCodexError({ message: text });
+  return isBlockingCodexError(codexError) ? codexError : null;
 }
 
 export function buildInitializeParams() {
@@ -362,6 +398,13 @@ function isBlockingCodexError(codexError) {
     || codexError?.kind === CODEX_ERROR_KINDS.QUOTA_EXHAUSTED
     || codexError?.kind === CODEX_ERROR_KINDS.RATE_LIMITED
     || codexError?.kind === CODEX_ERROR_KINDS.APP_SERVER_OVERLOADED;
+}
+
+function createCodexBlockingError(codexError, diagnosticLine = '') {
+  const error = new Error(codexError?.message || 'Codex task blocked.');
+  error.codexError = codexError || classifyCodexError({ message: error.message });
+  error.rawCodexError = diagnosticLine ? { diagnostic: diagnosticLine } : null;
+  return error;
 }
 
 function codexErrorFromRateLimits(rateLimits) {

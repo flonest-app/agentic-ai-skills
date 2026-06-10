@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { CODEX_ERROR_KINDS } from '../runtime/agentic-ai-maintainer/scripts/codex-errors.mjs';
 import {
   MiniAppServerClient,
   buildInitializeParams,
+  codexErrorFromDiagnosticLine,
   hasAppServerModelActivity,
   hasExhaustedCodexCredits,
   openAppServerThread,
@@ -18,9 +22,23 @@ test('suppresses noisy Codex app-server loader warnings from terminal mirroring'
 
 test('mirrors actionable Codex app-server diagnostics', () => {
   assert.equal(shouldMirrorCodexDiagnosticLine('error: app-server failed to start'), true);
-  assert.equal(shouldMirrorCodexDiagnosticLine('fatal: unauthorized account'), true);
-  assert.equal(shouldMirrorCodexDiagnosticLine('Usage limit reached. You have reached your usage limit.'), true);
-  assert.equal(shouldMirrorCodexDiagnosticLine('Server overloaded; retry later.'), true);
+  assert.equal(shouldMirrorCodexDiagnosticLine('fatal: unexpected child process crash'), true);
+  assert.equal(shouldMirrorCodexDiagnosticLine('fatal: unauthorized account'), false);
+  assert.equal(shouldMirrorCodexDiagnosticLine('Usage limit reached. You have reached your usage limit.'), false);
+  assert.equal(shouldMirrorCodexDiagnosticLine('Server overloaded; retry later.'), false);
+  assert.equal(shouldMirrorCodexDiagnosticLine('"error": {'), false);
+});
+
+test('classifies blocking Codex stderr diagnostics without raw terminal mirroring', () => {
+  const authLine = 'failed to refresh available models: unexpected status 401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.';
+  const authError = codexErrorFromDiagnosticLine(authLine);
+
+  assert.equal(authError.kind, CODEX_ERROR_KINDS.AUTH_REQUIRED);
+  assert.equal(shouldMirrorCodexDiagnosticLine(authLine), false);
+  assert.equal(
+    codexErrorFromDiagnosticLine('failed to connect to websocket: HTTP error: 401 Unauthorized')?.kind,
+    CODEX_ERROR_KINDS.AUTH_REQUIRED,
+  );
 });
 
 test('initializes app-server with experimental API capability for cheap resume', () => {
@@ -129,6 +147,39 @@ test('does not stop on retryable app-server error notification', async () => {
   assert.equal(hasAppServerModelActivity(result.activity), true);
   assert.equal(result.activity.output_chars, 4);
   assert.equal(result.activity.agent_message_delta_count, 1);
+});
+
+test('stderr auth invalidation rejects pending app-server requests and stops the process', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'agentic-ai-appserver-stderr-'));
+  const client = new MiniAppServerClient({ cwd });
+  const previousDiagnostics = process.env.AGENTIC_AI_CODEX_DIAGNOSTICS;
+  process.env.AGENTIC_AI_CODEX_DIAGNOSTICS = '1';
+  let killed = false;
+  client.proc = { kill: () => { killed = true; } };
+
+  let rejected = null;
+  const timeout = setTimeout(() => {}, 1000);
+  client.pending.set(1, {
+    method: 'thread/start',
+    resolve: () => {},
+    reject: (error) => { rejected = error; },
+    timeout,
+  });
+
+  try {
+    const observed = new Promise((resolve) => client.once('codex-error', resolve));
+    client.handleStderr(Buffer.from('2026 ERROR failed to refresh available models: unexpected status 401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.\n'));
+    const codexError = await observed;
+
+    assert.equal(codexError.kind, CODEX_ERROR_KINDS.AUTH_REQUIRED);
+    assert.equal(rejected.codexError.kind, CODEX_ERROR_KINDS.AUTH_REQUIRED);
+    assert.equal(client.pending.size, 0);
+    assert.equal(killed, true);
+  } finally {
+    clearTimeout(timeout);
+    if (previousDiagnostics === undefined) delete process.env.AGENTIC_AI_CODEX_DIAGNOSTICS;
+    else process.env.AGENTIC_AI_CODEX_DIAGNOSTICS = previousDiagnostics;
+  }
 });
 
 test('tracks tool activity and identifies truly empty turns', async () => {
