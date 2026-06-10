@@ -1,6 +1,6 @@
 {
   "channel": "stable",
-  "git_ref": "v0.1.16",
+  "git_ref": "v0.1.17",
   "min_cli_version": "0.1.0",
   "name": "Agentic AI Skillhub",
   "sha256": "881e8ff3219a47729cbfb2d683669466e637cbc7535817e8083b89bb2ae7efc6",
